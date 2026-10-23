@@ -12,7 +12,7 @@ from .paths import app_home
 PACKAGES = (
     'python3', 'python3-venv', 'python3-pip', 'python3-uvicorn', 'python3-dev',
     'nginx', 'certbot', 'python3-certbot-nginx', 'curl', 'unzip',
-    'ca-certificates', 'git', 'openssh-server', 'build-essential', 'pkg-config',
+    'ca-certificates', 'git', 'openssh-server', 'build-essential', 'pkg-config', 'acl',
 )
 SYSTEM_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 

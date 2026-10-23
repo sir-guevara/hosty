@@ -86,3 +86,7 @@
 .lni-xmark::before {
   content: "\ec52";
 }
+
+.lni-trash-3::before {
+  content: "\ec17";
+}

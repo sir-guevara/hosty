@@ -140,6 +140,79 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 400)
         self.assertEqual(server.apps()[0]['environment'], 'development')
 
+    def test_deletion_requires_exact_confirmation(self):
+        item = {'id': 'abcdef123456', 'name': 'Keep me', 'domain': '', 'path': self.temp.name, 'runtime': 'html', 'port': 9000, 'environment': 'development'}
+        server.save([item])
+        with patch.object(server, 'delete_app') as delete:
+            for confirmation in [None, '', 'delete', 'DELETE ', 'Delete']:
+                with self.subTest(confirmation=confirmation), self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self.request('/api/apps/abcdef123456/delete', {'confirmation': confirmation})
+                self.assertEqual(ctx.exception.code, 400)
+            delete.assert_not_called()
+        self.assertEqual(server.apps(), [item])
+
+    def test_delete_running_local_app_preserves_project(self):
+        project = Path(self.temp.name) / 'project'
+        project.mkdir()
+        index = project / 'index.html'
+        index.write_text('Keep this source file')
+        app = self.request('/api/apps', {'name': 'Delete me', 'runtime': 'html', 'path': str(project)})
+        process = server.PROCESSES[app['id']]
+        result = self.request(f'/api/apps/{app["id"]}/delete', {'confirmation': 'DELETE'})
+        self.assertEqual(result['deleted'], app['id'])
+        self.assertEqual(server.apps(), [])
+        self.assertIsNotNone(process.poll())
+        self.assertNotIn(app['id'], server.PROCESSES)
+        self.assertEqual(index.read_text(), 'Keep this source file')
+
+    def test_delete_installed_app_removes_only_managed_files(self):
+        import subprocess
+        item = {'id': 'abcdef123456', 'name': 'Tool', 'domain': 'tool.example.com', 'path': self.temp.name, 'runtime': 'html', 'port': 9000, 'environment': 'production'}
+        other = {**item, 'id': '123456abcdef', 'name': 'Other'}
+        server.save([item, other])
+        managed = Path(self.temp.name) / 'managed'
+        managed.mkdir()
+        unit = managed / 'hosty-app-abcdef123456.service'
+        route = managed / 'hosty-abcdef123456.conf'
+        unit.write_text('unit')
+        route.write_text('nginx')
+        source = Path(self.temp.name) / 'source.txt'
+        source.write_text('keep')
+        def mapped(path):
+            return managed / Path(path).name
+        with patch.object(server, 'SYSTEM', True), patch.object(server, 'Path', side_effect=mapped), patch.object(server, 'command') as command, patch.object(server.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'active')):
+            self.request('/api/apps/abcdef123456/delete', {'confirmation': 'DELETE'})
+            command.assert_any_call(['systemctl', 'disable', '--now', 'hosty-app-abcdef123456'])
+            command.assert_any_call(['systemctl', 'reload', 'nginx'])
+        self.assertFalse(unit.exists())
+        self.assertFalse(route.exists())
+        self.assertEqual(server.apps(), [other])
+        self.assertEqual(source.read_text(), 'keep')
+
+    def test_failed_delete_restores_configuration(self):
+        import subprocess
+        item = {'id': 'abcdef123456', 'name': 'Tool', 'domain': 'tool.example.com', 'path': self.temp.name, 'runtime': 'html', 'port': 9000, 'environment': 'production'}
+        server.save([item])
+        managed = Path(self.temp.name) / 'managed'
+        managed.mkdir()
+        unit = managed / 'hosty-app-abcdef123456.service'
+        route = managed / 'hosty-abcdef123456.conf'
+        unit.write_text('original unit')
+        route.write_text('original nginx')
+        def mapped(path):
+            return managed / Path(path).name
+        def command(args):
+            if args == ['nginx', '-t']:
+                raise ValueError('Nginx check failed')
+            return ''
+        with patch.object(server, 'SYSTEM', True), patch.object(server, 'Path', side_effect=mapped), patch.object(server, 'command', side_effect=command), patch.object(server.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'active')):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.request('/api/apps/abcdef123456/delete', {'confirmation': 'DELETE'})
+            self.assertEqual(ctx.exception.code, 400)
+        self.assertEqual(unit.read_text(), 'original unit')
+        self.assertEqual(route.read_text(), 'original nginx')
+        self.assertEqual(server.apps(), [item])
+
 if __name__ == '__main__':
     unittest.main()
 

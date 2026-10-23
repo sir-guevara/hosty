@@ -33,6 +33,65 @@ def command(args):
     return result.stdout.strip()
 
 
+def service_action(item, action):
+    unit = f'hosty-app-{item["id"]}'
+    try:
+        if action in ('start', 'restart'):
+            command(['systemctl', 'reset-failed', unit])
+        command(['systemctl', action, unit])
+    except (ValueError, subprocess.TimeoutExpired) as error:
+        try:
+            logs = command(['journalctl', '-u', unit, '-n', '40', '--no-pager'])
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            logs = 'Could not read the service journal.'
+        raise ValueError(f'{action.capitalize()} failed for {item["name"]}: {error}\n\n{logs}') from error
+
+
+def prepare_app_permissions(item):
+    """Grant the app account access without changing project ownership."""
+    path = Path(item['path']).resolve(strict=True)
+    reserved = {Path(p).resolve() for p in ('/', '/home', '/root', '/var', '/var/www', '/var/lib', '/var/lib/hosty', '/opt', '/opt/hosty', '/tmp')}
+    reserved.update((Path.home().resolve(), Path(app_home()).resolve()))
+    protected = ('/etc', '/usr', '/bin', '/sbin', '/lib', '/lib64', '/boot', '/dev', '/proc', '/sys', '/run', '/opt/hosty', '/var/lib/hosty')
+    if path in reserved or any(path == Path(p).resolve() or Path(p).resolve() in path.parents for p in protected):
+        raise ValueError('Choose a dedicated project directory, not a home directory or system directory, so Hosty can grant app access safely.')
+    if not path.is_dir():
+        raise ValueError(f'App directory not found: {path}')
+    if not shutil.which('setfacl'):
+        raise ValueError('Automatic app permissions require acl. Rerun sudo sh install.sh to install it.')
+    # Traverse parents without allowing the app to list or write their contents.
+    for parent in reversed(path.parents):
+        if parent == Path('/'):
+            continue
+        command(['setfacl', '-m', 'u:hosty:--x', '--', str(parent)])
+    # Physical traversal: do not grant access to targets of project symlinks.
+    command(['setfacl', '-R', '-P', '-m', 'u:hosty:rwX', '--', str(path)])
+    def walk_error(error):
+        raise error
+    batch = []
+    for directory, _, _ in os.walk(path, followlinks=False, onerror=walk_error):
+        batch.append(directory)
+        if len(batch) == 128:
+            command(['setfacl', '-m', 'd:u:hosty:rwx', '--', *batch])
+            batch = []
+    if batch:
+        command(['setfacl', '-m', 'd:u:hosty:rwx', '--', *batch])
+
+
+def check_app_access(item):
+    path = item['path']
+    try:
+        command(['runuser', '-u', 'hosty', '--', 'test', '-r', path])
+        command(['runuser', '-u', 'hosty', '--', 'test', '-x', path])
+    except ValueError as error:
+        raise ValueError(
+            f'The hosty app user cannot read or enter {path}. '
+            'Apps run as hosty, even though the panel runs as root. '
+            'Use a shared app directory such as /var/www/my-app and grant hosty access '
+            'to the project and its parent directories. Do not make /root public.'
+        ) from error
+
+
 def apps():
     path = DATA / 'apps.json'
     return json.loads(path.read_text()) if path.exists() else []
@@ -161,6 +220,9 @@ def provision(item):
     runtime = item['runtime']
     path = item['path']
     port = item['port']
+    if SYSTEM:
+        prepare_app_permissions(item)
+    check_app_access(item)
     if runtime == 'html':
         executable = f'/usr/bin/python3 -m http.server {port} --bind 127.0.0.1'
     elif runtime == 'python':
@@ -182,6 +244,7 @@ Group=hosty
 WorkingDirectory={path}
 Environment=PORT={port}
 Environment=HOST=127.0.0.1
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NODE_ENV={'production' if environment(item) == 'production' else 'development'}
 ExecStart={executable}
 Restart=on-failure
@@ -213,7 +276,42 @@ WantedBy=multi-user.target
     command(['systemctl', 'daemon-reload'])
     command(['systemctl', 'reload', 'nginx'])
     command(['systemctl', 'enable', f'hosty-app-{ident}'])
-    command(['systemctl', 'restart', f'hosty-app-{ident}'])
+    service_action(item, 'restart')
+
+
+def delete_app(items, item):
+    remaining = [app for app in items if app['id'] != item['id']]
+    if not SYSTEM:
+        stop_local(item['id'])
+        save(remaining)
+        return
+    unit = f'hosty-app-{item["id"]}'
+    unit_path = Path(f'/etc/systemd/system/{unit}.service')
+    nginx_path = Path(f'/etc/nginx/conf.d/hosty-{item["id"]}.conf')
+    backups = {path: path.read_text() if path.exists() else None for path in (unit_path, nginx_path)}
+    running = status(item)['status'] == 'running'
+    enabled = subprocess.run(['systemctl', 'is-enabled', '--quiet', unit], capture_output=True).returncode == 0
+    try:
+        if backups[unit_path] is not None:
+            command(['systemctl', 'disable', '--now', unit])
+        unit_path.unlink(missing_ok=True)
+        nginx_path.unlink(missing_ok=True)
+        command(['nginx', '-t'])
+        command(['systemctl', 'daemon-reload'])
+        command(['systemctl', 'reload', 'nginx'])
+        save(remaining)
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        for path, content in backups.items():
+            if content is not None:
+                path.write_text(content)
+        command(['systemctl', 'daemon-reload'])
+        command(['systemctl', 'reload', 'nginx'])
+        if backups[unit_path] is not None:
+            if enabled:
+                command(['systemctl', 'enable', unit])
+            if running:
+                service_action(item, 'start')
+        raise
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -312,13 +410,18 @@ class Handler(BaseHTTPRequestHandler):
                         result['warning'] = str(error)
                         return self.reply(result, 201)
                 return self.reply(status(item), 201)
-            match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/(start|stop|restart|ssl|logs|environment)', self.path)
+            match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/(start|stop|restart|ssl|logs|environment|delete)', self.path)
             if not match:
                 return self.reply({'error': 'Not found'}, 404)
             ident, action = match.groups()
             item = next((a for a in items if a['id'] == ident), None)
             if not item:
                 return self.reply({'error': 'App not found'}, 404)
+            if action == 'delete':
+                if data.get('confirmation') != 'DELETE':
+                    raise ValueError('Type DELETE exactly to confirm app deletion.')
+                delete_app(items, item)
+                return self.reply({'deleted': ident})
             if action == 'environment':
                 mode = data.get('environment')
                 if mode not in ('development', 'production'):
@@ -387,7 +490,10 @@ class Handler(BaseHTTPRequestHandler):
                 item['ssl'] = True
                 save(items)
             else:
-                command(['systemctl', action, f'hosty-app-{ident}'])
+                if action in ('start', 'restart'):
+                    prepare_app_permissions(item)
+                    check_app_access(item)
+                service_action(item, action)
             self.reply(status(item))
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             self.reply({'error': str(error)}, 400)

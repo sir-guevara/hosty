@@ -413,3 +413,13 @@ nav button .lni { font-size: 20px; }
 
 form > label > select { display: block; width: 100%; margin: 8px 0; padding: 11px 12px; color: #355a2c; }
 .environment-select { padding: 3px 5px; font-size: 11px; background: #e0efcf; color: #2d5427; }
+.form-error { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.app-actions { flex-wrap: wrap; }
+.app-actions .delete-app-button { color: #a33327; background: #fff5f2; border-color: #e2b8ad; }
+.app-actions .delete-app-button:hover { color: #81251c; background: #fbe1da; border-color: #bd6a58; }
+.danger { padding: 11px 16px; border: 1px solid #a33327; border-radius: 6px; color: #fff; background: #a33327; font-size: 13px; font-weight: 600; }
+.danger:hover:not(:disabled) { background: #81251c; }
+.danger:disabled { cursor: not-allowed; }
+#delete-dialog p { margin-top: 18px; }
+#delete-app-name { color: #193622; overflow-wrap: anywhere; }

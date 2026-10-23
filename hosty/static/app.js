@@ -48,7 +48,7 @@ function render() {
   $('timezone').textContent = s.timezone;
   $('ssh-command').textContent = `ssh user@${s.ip}`;
   updateFormEnvironment();
-  $('path-help').textContent = `Directory on ${s.hostname}. ~/ expands to ${s.app_home}/. Use the full path if your project is elsewhere.`;
+  $('path-help').textContent = `Directory on ${s.hostname}. ~/ expands to ${s.app_home}/. Use a dedicated project folder; installed Hosty configures app access automatically.`;
   const details = {'Hostname': s.hostname, 'IP address': s.ip, 'Operating system': s.os, 'CPU cores': s.cores, 'Python': s.python, 'Bun': s.bun, 'Timezone': s.timezone, 'Firewall': s.firewall, 'SSH / SFTP': s.ssh, 'Panel mode': s.system ? 'Ubuntu · per-app environments' : 'Local development'};
   $('server-details').innerHTML = Object.entries(details).map(([key, value]) => `<dt>${escape(key)}</dt><dd>${escape(value)}</dd>`).join('');
   renderApps();
@@ -59,7 +59,7 @@ function renderApps() {
   const query = $('search').value.toLowerCase(), filter = $('status-filter').value;
   const list = state.apps.filter(a => (a.name + ' ' + a.domain + ' ' + (a.local_url || '')).toLowerCase().includes(query) && (filter === 'all' || a.status === filter));
   $('table-count').textContent = `${list.length} application${list.length === 1 ? '' : 's'}`;
-  $('app-list').innerHTML = list.length ? list.map(a => `<div class="app-row"><div class="app-name"><div class="app-icon">${runtimeIcon(a.runtime)}</div><div><strong>${escape(a.name)}</strong><a href="${escape(a.local_url || (a.domain ? (a.ssl ? 'https' : 'http') + '://' + a.domain : '#'))}" target="_blank" rel="noopener">${escape(a.local_url || a.domain || 'No domain')} ${icon('arrow-angular-top-right')}</a><div class="environment-links"><select class="environment-select" aria-label="Environment for ${escape(a.name)}" data-environment="${a.id}"><option value="development" ${a.environment === 'development' ? 'selected' : ''}>DEV</option><option value="production" ${a.environment === 'production' ? 'selected' : ''}>PROD</option></select>${a.environment === 'development' ? (a.production_url ? `<span>Prod: <a href="${escape(a.production_url)}" target="_blank" rel="noopener">${escape(a.domain)} ${icon('arrow-angular-top-right')}</a></span>` : '<span>Production domain not configured</span>') : `<span>Dev: <a href="${escape(a.dev_url)}" target="_blank" rel="noopener">${escape(a.dev_url)} ${icon('arrow-angular-top-right')}</a></span>`}</div></div></div><span class="app-status ${a.status}"><i></i>${a.status[0].toUpperCase() + a.status.slice(1)}</span><span class="runtime-label"><b>${runtimeIcon(a.runtime)}</b>${{html: 'HTML',python: 'Python',bun: 'Bun'}[a.runtime]}</span><button class="ssl-label ${a.ssl ? '' : 'off'}" data-cert="${a.id}" title="Manage SSL" ${a.environment === 'development' ? 'disabled' : ''}>${icon(a.ssl ? 'shield-2-check' : 'unlocked-2')} ${a.environment === 'development' ? 'Local HTTP' : a.ssl ? 'Secure' : 'Enable'}</button><div class="app-actions"><button title="${a.status === 'running' ? 'Stop' : 'Start'} application" aria-label="${a.status === 'running' ? 'Stop' : 'Start'} application" data-action="${a.status === 'running' ? 'stop' : 'start'}" data-id="${a.id}">${icon(a.status === 'running' ? 'pause' : 'play')}</button><button title="Restart application" aria-label="Restart application" data-action="restart" data-id="${a.id}">${icon('refresh-circle-1-clockwise')}</button><button title="View application logs" aria-label="View application logs" data-action="logs" data-id="${a.id}">${icon('file-pencil')}</button></div></div>`).join('') : `<div class="empty"><div class="empty-symbol">${icon('flower-2')}</div><h3>${state.apps.length ? 'No applications match your search.' : 'Big ideas start with a little app.'}</h3><p>${state.apps.length ? 'Try another name or status.' : 'Give your first project a place to call home.'}</p>${state.apps.length ? '' : `<button class="secondary" id="empty-add">${icon('plus')} Add your first application</button>`}</div>`;
+  $('app-list').innerHTML = list.length ? list.map(a => `<div class="app-row"><div class="app-name"><div class="app-icon">${runtimeIcon(a.runtime)}</div><div><strong>${escape(a.name)}</strong><a href="${escape(a.local_url || (a.domain ? (a.ssl ? 'https' : 'http') + '://' + a.domain : '#'))}" target="_blank" rel="noopener">${escape(a.local_url || a.domain || 'No domain')} ${icon('arrow-angular-top-right')}</a><div class="environment-links"><select class="environment-select" aria-label="Environment for ${escape(a.name)}" data-environment="${a.id}"><option value="development" ${a.environment === 'development' ? 'selected' : ''}>DEV</option><option value="production" ${a.environment === 'production' ? 'selected' : ''}>PROD</option></select>${a.environment === 'development' ? (a.production_url ? `<span>Prod: <a href="${escape(a.production_url)}" target="_blank" rel="noopener">${escape(a.domain)} ${icon('arrow-angular-top-right')}</a></span>` : '<span>Production domain not configured</span>') : `<span>Dev: <a href="${escape(a.dev_url)}" target="_blank" rel="noopener">${escape(a.dev_url)} ${icon('arrow-angular-top-right')}</a></span>`}</div></div></div><span class="app-status ${a.status}"><i></i>${a.status[0].toUpperCase() + a.status.slice(1)}</span><span class="runtime-label"><b>${runtimeIcon(a.runtime)}</b>${{html: 'HTML',python: 'Python',bun: 'Bun'}[a.runtime]}</span><button class="ssl-label ${a.ssl ? '' : 'off'}" data-cert="${a.id}" title="Manage SSL" ${a.environment === 'development' ? 'disabled' : ''}>${icon(a.ssl ? 'shield-2-check' : 'unlocked-2')} ${a.environment === 'development' ? 'Local HTTP' : a.ssl ? 'Secure' : 'Enable'}</button><div class="app-actions"><button title="${a.status === 'running' ? 'Stop' : 'Start'} application" aria-label="${a.status === 'running' ? 'Stop' : 'Start'} application" data-action="${a.status === 'running' ? 'stop' : 'start'}" data-id="${a.id}">${icon(a.status === 'running' ? 'pause' : 'play')}</button><button title="Restart application" aria-label="Restart application" data-action="restart" data-id="${a.id}">${icon('refresh-circle-1-clockwise')}</button><button title="View application logs" aria-label="View application logs" data-action="logs" data-id="${a.id}">${icon('file-pencil')}</button><button class="delete-app-button" title="Delete application" aria-label="Delete ${escape(a.name)}" data-delete="${a.id}">${icon('trash-3')}</button></div></div>`).join('') : `<div class="empty"><div class="empty-symbol">${icon('flower-2')}</div><h3>${state.apps.length ? 'No applications match your search.' : 'Big ideas start with a little app.'}</h3><p>${state.apps.length ? 'Try another name or status.' : 'Give your first project a place to call home.'}</p>${state.apps.length ? '' : `<button class="secondary" id="empty-add">${icon('plus')} Add your first application</button>`}</div>`;
   if ($('empty-add')) $('empty-add').onclick = openApp;
 }
 function navigate(next) {
@@ -120,7 +120,7 @@ document.addEventListener('click', async e => {
   }
   button.disabled = true;
   try { const result = await api(`apps/${id}/${operation}`, body); if (operation === 'logs') info('Application logs', result.logs || 'No log entries yet.'); else { await refresh(); toast(operation === 'ssl' ? 'HTTPS certificate is ready.' : `Application ${operation === 'stop' ? 'stopped' : operation === 'restart' ? 'restarted' : 'started'}.`); } }
-  catch(error) { toast(error.message); }
+  catch(error) { if (error.message.includes('\n')) info('Application could not start', error.message); else toast(error.message); }
   finally { button.disabled = false; }
 });
 if (token) refresh().catch(() => {}); else $('auth-dialog').showModal();
@@ -146,3 +146,51 @@ document.addEventListener('change', async e => {
     await refresh().catch(() => {});
   } finally { select.disabled = false; }
 });
+
+let deletingAppId = null, deletionBusy = false;
+function closeDelete() {
+  if (deletionBusy) return;
+  $('delete-dialog').close();
+  deletingAppId = null;
+}
+document.addEventListener('click', e => {
+  const button = e.target.closest('[data-delete]');
+  if (!button) return;
+  const app = state.apps.find(a => a.id === button.dataset.delete);
+  if (!app) return;
+  deletingAppId = app.id;
+  $('delete-app-name').textContent = app.name;
+  $('delete-form').reset();
+  $('delete-error').textContent = '';
+  $('delete-submit').disabled = true;
+  $('delete-dialog').showModal();
+  $('delete-confirmation').focus();
+});
+$('delete-confirmation').oninput = () => { $('delete-submit').disabled = deletionBusy || $('delete-confirmation').value !== 'DELETE'; };
+$('delete-cancel').onclick = closeDelete;
+$('delete-close').onclick = closeDelete;
+$('delete-dialog').addEventListener('cancel', e => { e.preventDefault(); closeDelete(); });
+$('delete-form').onsubmit = async e => {
+  e.preventDefault();
+  if (deletionBusy || !deletingAppId || $('delete-confirmation').value !== 'DELETE') return;
+  deletionBusy = true;
+  $('delete-submit').disabled = true;
+  $('delete-cancel').disabled = true;
+  $('delete-close').disabled = true;
+  $('delete-error').textContent = '';
+  try {
+    await api(`apps/${deletingAppId}/delete`, {confirmation: $('delete-confirmation').value});
+    $('delete-dialog').close();
+    deletingAppId = null;
+    toast('Application deleted. Project files kept.');
+    await refresh();
+  } catch (error) {
+    if ($('delete-dialog').open) $('delete-error').textContent = error.message;
+    else toast(error.message);
+  } finally {
+    deletionBusy = false;
+    $('delete-cancel').disabled = false;
+    $('delete-close').disabled = false;
+    $('delete-submit').disabled = $('delete-confirmation').value !== 'DELETE';
+  }
+};

@@ -110,3 +110,68 @@ class PanelAliasTest(unittest.TestCase):
         self.assertIn('--bind 127.0.0.1', write.call_args.args[0])
         self.assertIn('NODE_ENV=development', write.call_args.args[0])
         unlink.assert_called_once_with(missing_ok=True)
+
+class AppStartupDiagnosticsTest(unittest.TestCase):
+    @patch('hosty.server.command')
+    def test_service_failure_includes_journal(self, command):
+        from hosty.server import service_action
+        command.side_effect = ['', ValueError('Failed to start service'), 'status=200/CHDIR: Permission denied']
+        with self.assertRaises(ValueError) as error:
+            service_action({'id': '96d70ac41722', 'name': 'Savings'}, 'restart')
+        self.assertIn('200/CHDIR', str(error.exception))
+        self.assertIn('Savings', str(error.exception))
+        command.assert_any_call(['journalctl', '-u', 'hosty-app-96d70ac41722', '-n', '40', '--no-pager'])
+
+    @patch('hosty.server.command', side_effect=ValueError('Command failed'))
+    def test_unreadable_app_has_actionable_error(self, command):
+        from hosty.server import check_app_access
+        with self.assertRaises(ValueError) as error:
+            check_app_access({'path': '/root/typewriter-savings'})
+        self.assertIn('Apps run as hosty', str(error.exception))
+        self.assertIn('/var/www', str(error.exception))
+
+class AutomaticPermissionsTest(unittest.TestCase):
+    @patch('hosty.server.shutil.which', return_value='/usr/bin/setfacl')
+    @patch('hosty.server.command')
+    def test_project_grants_are_scoped_and_new_files_inherit_access(self, command, which):
+        import tempfile
+        from hosty.server import prepare_app_permissions
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / 'project'
+            nested = project / 'data'
+            nested.mkdir(parents=True)
+            external = Path(temporary) / 'outside'
+            external.mkdir()
+            (project / 'link').symlink_to(external, target_is_directory=True)
+            prepare_app_permissions({'path': str(project)})
+            commands = [call.args[0] for call in command.call_args_list]
+            command.assert_any_call(['setfacl', '-R', '-P', '-m', 'u:hosty:rwX', '--', str(project.resolve())])
+            defaults = [args for args in commands if 'd:u:hosty:rwx' in args]
+            self.assertEqual(len(defaults), 1)
+            self.assertIn(str(nested.resolve()), defaults[0])
+            self.assertNotIn(str(external), defaults[0])
+            self.assertNotIn(str(project / 'link'), defaults[0])
+            for args in commands:
+                if 'u:hosty:--x' in args:
+                    self.assertNotIn('-R', args)
+            self.assertFalse(any(args[0] in ('chown', 'chmod') for args in commands))
+
+    @patch('hosty.server.command')
+    def test_home_and_system_directories_are_not_modified(self, command):
+        from hosty.server import prepare_app_permissions
+        for path in ['/', '/etc', str(Path.home())]:
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                prepare_app_permissions({'path': path})
+        command.assert_not_called()
+
+    @patch('hosty.server.shutil.which', return_value=None)
+    @patch('hosty.server.command')
+    def test_missing_acl_explains_how_to_upgrade(self, command, which):
+        import tempfile
+        from hosty.server import prepare_app_permissions
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / 'project'
+            project.mkdir()
+            with self.assertRaisesRegex(ValueError, 'sudo sh install.sh'):
+                prepare_app_permissions({'path': str(project)})
+        command.assert_not_called()
