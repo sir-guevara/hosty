@@ -1,0 +1,1 @@
+"""Hosty hosting panel."""
