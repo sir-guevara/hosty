@@ -15,6 +15,7 @@ import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from .paths import app_home, expand_app_path
 
 DATA = Path(os.environ.get('HOSTY_DATA', Path.home() / '.local/share/hosty'))
 SYSTEM = os.environ.get('HOSTY_SYSTEM') == '1'
@@ -62,7 +63,7 @@ def metrics():
         ip = socket.gethostbyname(socket.gethostname())
     except OSError:
         ip = '127.0.0.1'
-    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'app_home': os.path.expanduser('~'), 'firewall': 'Unverified', 'ssh': 'Managed on server'}
+    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'app_home': app_home(), 'firewall': 'Unverified', 'ssh': 'Managed on server'}
 
 
 def status(item):
@@ -241,8 +242,7 @@ class Handler(BaseHTTPRequestHandler):
                 name = str(data.get('name', '')).strip()
                 domain = str(data.get('domain', '')).strip().lower()
                 path = str(data.get('path', '')).strip()
-                if path == '~' or path.startswith('~/'):
-                    path = os.path.expanduser(path)
+                path = expand_app_path(path)
                 runtime = data.get('runtime')
                 if not name or len(name) > 64:
                     raise ValueError('App name must be 1–64 characters.')
@@ -255,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     mode = Path(path).stat().st_mode
                 except FileNotFoundError:
-                    raise ValueError(f'Directory not found on the Hosty server: {path}. ~ expands to {os.path.expanduser("~")}. Enter the full path to your project on this machine.')
+                    raise ValueError(f'Directory not found on the Hosty server: {path}. ~ expands to {app_home()}. Enter the full path to your project on this machine.')
                 except PermissionError:
                     raise ValueError(f'Hosty cannot access {path}. Give the user running Hosty permission to traverse this directory and its parent directories.')
                 if not stat.S_ISDIR(mode):

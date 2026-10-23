@@ -47,7 +47,7 @@ A published curl bootstrap URL is not included; use a clone from your own truste
 1. Upload your project using your existing SSH/SFTP account, for example to `/var/www/my-app`.
 2. Give the `hosty` user read and execute access to the project and its parent directories. App data directories must be writable by that user.
 3. Create a DNS A record for your domain pointing to the VPS public IP. The dashboard displays the host's resolved address, which may be private; check your VPS provider for the public IP.
-4. Select **New application**, enter a name, domain, runtime, and existing directory (an absolute path or `~/my-app`). `~` expands to the home directory of the user running the Hosty panel; the installed root service uses `/root`.
+4. Select **New application**, enter a name, domain, runtime, and existing directory (an absolute path or `~/my-app`). `~` expands to the home of the user who ran the installer with `sudo`, saved as `HOSTY_APP_HOME` in `/etc/hosty.env`. Installing directly as root uses `/root`. Rerun `sudo sh install.sh` from your normal user to configure this on an existing installation. An existing `HOSTY_APP_HOME` setting is preserved. Local mode uses the current user (or sudo caller).
 
 Runtime conventions:
 

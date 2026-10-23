@@ -4,7 +4,9 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import json
 from pathlib import Path
+from .paths import app_home
 
 
 PACKAGES = (
@@ -93,6 +95,11 @@ def install():
     if not env.exists():
         env.write_text(f'HOSTY_TOKEN={token}\nHOSTY_DATA=/var/lib/hosty\nHOSTY_SYSTEM=1\n')
         env.chmod(0o600)
+    # Persist the sudo caller's home: systemd does not inherit SUDO_USER.
+    settings = env.read_text()
+    if not any(line.startswith('HOSTY_APP_HOME=') for line in settings.splitlines()):
+        with env.open('a') as output:
+            output.write(('' if settings.endswith('\n') else '\n') + f'HOSTY_APP_HOME={json.dumps(app_home())}\n')
     Path('/etc/systemd/system/hosty.service').write_text('''[Unit]
 Description=Hosty panel
 After=network.target
