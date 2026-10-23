@@ -25,12 +25,14 @@ Apps run as your current user and bind to loopback (Bun apps must honor `HOST` a
 Clone this repository on your VPS, then run:
 
 ```sh
-sudo python3 -m hosty.cli install
+sudo sh install.sh
 ```
+
+The bootstrap installs Python if it is missing, then runs `hosty install`. If Python is already available, `sudo python3 -m hosty.cli install` also works.
 
 Alternatively install this package in a virtual environment with `pip install .`, then run `sudo /path/to/venv/bin/hosty install`.
 
-The installer installs Nginx, Python venv support, Certbot, and the Hosty systemd service. It binds the panel to localhost. Access it through an SSH tunnel:
+The installer checks installed packages and installs missing dependencies: Python, pip, venv, Uvicorn, Python build tools, Nginx, Certbot with its Nginx plugin, curl, unzip, CA certificates, Git, OpenSSH/SFTP, and native build tools. It installs Bun system-wide using its official installer when no usable shared installation exists. Existing usable Bun installations are preserved. It verifies the runtimes and configuration, enables the services and certificate renewal timer, and installs a `hosty` command. Rerunning the installer keeps the existing panel token and app records. It binds the panel to localhost. Access it through an SSH tunnel:
 
 ```sh
 ssh -L 8787:127.0.0.1:8787 your-user@your-server
@@ -49,13 +51,13 @@ A published curl bootstrap URL is not included; use a clone from your own truste
 
 Runtime conventions:
 
-- **Python:** create `.venv` in the project, install your dependencies including `uvicorn`, and expose an ASGI `app` in `main.py`. Hosty runs `.venv/bin/python -m uvicorn main:app`.
-- **Bun:** install Bun in a system-wide executable location first. Provide a `start` script in `package.json`. The application must honor `HOST=127.0.0.1` and the assigned `PORT`.
+- **Python:** expose an ASGI `app` in `main.py`. On installed servers, Hosty provides Python and Uvicorn automatically. If your project has `.venv`, Hosty uses that environment instead; install project dependencies including `uvicorn` there. Dev mode requires this project `.venv`.
+- **Bun:** the Ubuntu installer supplies Bun automatically (install it yourself for local dev mode). Provide a `start` script in `package.json`. The application must honor `HOST=127.0.0.1` and the assigned `PORT`.
 - **HTML:** place `index.html` and assets in the directory. The initial implementation serves these using Python's basic HTTP server behind Nginx; use this for small personal sites.
 
 Hosty allocates ports starting at 9000, writes a systemd unit per app, and configures Nginx on port 80. Ensure ports 80 and 443 are reachable. After DNS resolves, select **Enable HTTPS** and supply your email to accept Let's Encrypt's terms. Certbot handles certificate renewal through its Ubuntu timer. The SSL badge records successful issuance; it does not monitor certificate expiration.
 
-To update a project, upload or pull your new code, install changed dependencies, then restart it in Hosty. Automatic Git pulling, dependency installation, custom startup commands, application deletion, and SSH/firewall toggles are not implemented. SSH/SFTP access remains managed by your existing operating system account and keys.
+To update a project, upload or pull your new code, install changed dependencies, then restart it in Hosty. Hosty installs its own runtime dependencies; project-specific packages in `requirements.txt` or `package.json` still need to be installed in each project. Automatic Git pulling, project dependency installation, custom startup commands, application deletion, and SSH/firewall toggles are not implemented. SSH/SFTP access remains managed by your existing operating system account and keys.
 
 ## Checks
 

@@ -149,7 +149,7 @@ def provision(item):
     elif runtime == 'python':
         python = str(Path(path) / '.venv/bin/python')
         if not Path(python).is_file():
-            raise ValueError('Create a .venv in the app directory and install your dependencies first.')
+            python = '/usr/bin/python3'
         executable = f'{python} -m uvicorn main:app --host 127.0.0.1 --port {port}'
     else:
         bun = shutil.which('bun')
