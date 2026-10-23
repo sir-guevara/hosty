@@ -1,4 +1,5 @@
 import hmac
+import atexit
 import json
 import os
 import platform
@@ -6,7 +7,9 @@ import re
 import secrets
 import shutil
 import socket
+import signal
 import subprocess
+import sys
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +17,8 @@ from pathlib import Path
 
 DATA = Path(os.environ.get('HOSTY_DATA', Path.home() / '.local/share/hosty'))
 SYSTEM = os.environ.get('HOSTY_SYSTEM') == '1'
+DEV = False
+PROCESSES = {}
 MUTATION_LOCK = threading.Lock()
 START = time.time()
 TOKEN = os.environ.get('HOSTY_TOKEN', '')
@@ -56,16 +61,82 @@ def metrics():
         ip = socket.gethostbyname(socket.gethostname())
     except OSError:
         ip = '127.0.0.1'
-    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'firewall': 'Unverified', 'ssh': 'Managed on server'}
+    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'firewall': 'Unverified', 'ssh': 'Managed on server'}
 
 
 def status(item):
     result = dict(item)
     result['status'] = 'configured'
-    if SYSTEM:
+    result['local_url'] = f'http://localhost:{item["port"]}' if DEV else None
+    if DEV:
+        process = PROCESSES.get(item['id'])
+        result['status'] = 'running' if process and process.poll() is None else 'stopped'
+    elif SYSTEM:
         running = subprocess.run(['systemctl', 'is-active', f'hosty-app-{item["id"]}'], capture_output=True, text=True)
         result['status'] = 'running' if running.stdout.strip() == 'active' else 'stopped'
     return result
+
+
+def stop_local(ident):
+    process = PROCESSES.pop(ident, None)
+    if process:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+
+
+def stop_all_local():
+    for ident in list(PROCESSES):
+        stop_local(ident)
+
+
+atexit.register(stop_all_local)
+
+
+def start_local(item):
+    process = PROCESSES.get(item['id'])
+    if process and process.poll() is None:
+        return
+    port = item['port']
+    with socket.socket() as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(('127.0.0.1', port))
+        except OSError:
+            raise ValueError(f'Port {port} is already in use. Stop the other process first.')
+    if item['runtime'] == 'html':
+        args = [sys.executable, '-u', '-m', 'http.server', str(port), '--bind', '127.0.0.1']
+    elif item['runtime'] == 'python':
+        python = Path(item['path']) / '.venv/bin/python'
+        if not python.is_file():
+            raise ValueError('Create a .venv in the app directory and install uvicorn and your dependencies first.')
+        args = [str(python), '-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', str(port)]
+    else:
+        bun = shutil.which('bun')
+        if not bun:
+            raise ValueError('Install Bun before starting a Bun application.')
+        args = [bun, 'run', 'start']
+    logs = DATA / 'logs'
+    logs.mkdir(parents=True, exist_ok=True)
+    with (logs / f'{item["id"]}.log').open('ab') as output:
+        process = subprocess.Popen(args, cwd=item['path'], env={**os.environ, 'HOST': '127.0.0.1', 'PORT': str(port)}, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+    PROCESSES[item['id']] = process
+    # Catch immediate startup failures instead of reporting a broken link as running.
+    for _ in range(30):
+        if process.poll() is not None:
+            stop_local(item['id'])
+            raise ValueError('Application exited during startup. Check its logs and runtime dependencies.')
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=0.1):
+                return
+        except OSError:
+            time.sleep(0.1)
 
 
 def provision(item):
@@ -169,16 +240,18 @@ class Handler(BaseHTTPRequestHandler):
                 name = str(data.get('name', '')).strip()
                 domain = str(data.get('domain', '')).strip().lower()
                 path = str(data.get('path', '')).strip()
+                if path == '~' or path.startswith('~/'):
+                    path = os.path.expanduser(path)
                 runtime = data.get('runtime')
                 if not name or len(name) > 64:
                     raise ValueError('App name must be 1–64 characters.')
-                if len(domain) > 253 or '.' not in domain or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in domain.split('.')):
+                if not (DEV and not domain) and (len(domain) > 253 or '.' not in domain or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in domain.split('.'))):
                     raise ValueError('Enter a valid domain, such as app.example.com.')
                 if runtime not in ('python', 'bun', 'html'):
                     raise ValueError('Choose a supported runtime.')
                 if not re.fullmatch(r'/[A-Za-z0-9_./-]+', path) or '..' in path.split('/') or not Path(path).is_dir():
-                    raise ValueError('Enter an existing absolute directory using letters, numbers, /, _, - or dots.')
-                if any(a['domain'] == domain for a in items):
+                    raise ValueError('Enter an existing absolute directory or ~/ path using letters, numbers, /, _, - or dots. ~ uses the home directory of the user running Hosty.')
+                if domain and any(a['domain'] == domain for a in items):
                     raise ValueError('This domain is already assigned to an app.')
                 item = {'id': secrets.token_hex(6), 'name': name, 'domain': domain, 'path': path, 'runtime': runtime, 'port': max([a['port'] for a in items] + [8999]) + 1, 'created': time.time(), 'ssl': False}
                 if SYSTEM:
@@ -193,6 +266,13 @@ class Handler(BaseHTTPRequestHandler):
                         raise
                 items.append(item)
                 save(items)
+                if DEV:
+                    try:
+                        start_local(item)
+                    except (ValueError, OSError) as error:
+                        result = status(item)
+                        result['warning'] = str(error)
+                        return self.reply(result, 201)
                 return self.reply(status(item), 201)
             match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/(start|stop|restart|ssl|logs)', self.path)
             if not match:
@@ -201,6 +281,21 @@ class Handler(BaseHTTPRequestHandler):
             item = next((a for a in items if a['id'] == ident), None)
             if not item:
                 return self.reply({'error': 'App not found'}, 404)
+            if DEV:
+                if action == 'ssl':
+                    raise ValueError('Development apps use local HTTP. SSL requires an Ubuntu installation and domain.')
+                if action == 'logs':
+                    log = DATA / 'logs' / f'{ident}.log'
+                    if not log.exists():
+                        return self.reply({'logs': 'No log entries yet.'})
+                    with log.open('rb') as source:
+                        source.seek(max(0, log.stat().st_size - 65536))
+                        return self.reply({'logs': source.read().decode('utf-8', errors='replace')})
+                if action in ('stop', 'restart'):
+                    stop_local(ident)
+                if action in ('start', 'restart'):
+                    start_local(item)
+                return self.reply(status(item))
             if not SYSTEM:
                 raise ValueError('Service controls require an Ubuntu installation. Run sudo hosty install on your VPS.')
             if action == 'logs':
@@ -219,8 +314,11 @@ class Handler(BaseHTTPRequestHandler):
             self.reply({'error': str(error)}, 400)
 
 
-def serve(host, port):
-    global TOKEN
+def serve(host, port, dev=False):
+    global TOKEN, DEV
+    if dev and SYSTEM:
+        raise SystemExit('Dev mode is for local use. Unset HOSTY_SYSTEM before running --dev.')
+    DEV = dev
     DATA.mkdir(parents=True, exist_ok=True)
     if not TOKEN:
         token_file = DATA / 'token'
@@ -229,4 +327,11 @@ def serve(host, port):
             token_file.chmod(0o600)
         TOKEN = token_file.read_text().strip()
     print(f'Hosty is ready at http://{host}:{port}\nPanel token: {TOKEN}', flush=True)
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    http = ThreadingHTTPServer((host, port), Handler)
+    try:
+        http.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        http.server_close()
+        stop_all_local()

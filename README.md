@@ -10,6 +10,16 @@ python3 -m hosty.cli serve
 
 Open http://127.0.0.1:8787 and enter the token printed in your terminal. Apps are saved in `~/.local/share/hosty/apps.json`. Local mode saves configurations; deployment and service controls require an Ubuntu installation. Linux supplies system memory and server uptime; on macOS memory is unavailable and uptime measures the panel process. CPU is normalized one-minute load average, not instantaneous CPU utilization.
 
+## Development mode
+
+```sh
+python3 -m hosty.cli serve --dev
+```
+
+Add an app with its local directory; the domain is optional. Hosty starts the app and displays a clickable `http://localhost:9000` address (each app gets its own port). Existing apps can be started using the play button. Start, stop, restart, and logs work without Ubuntu, Nginx, or DNS. Python and Bun use the runtime conventions below; HTML works with just an `index.html`.
+
+Apps run as your current user and bind to loopback (Bun apps must honor `HOST` and `PORT`). Local addresses refer to the machine running Hosty. SSL is disabled in dev mode. Apps stop when you exit the panel; use the play button to start them after relaunching. Do not run dev mode alongside a production Hosty installation.
+
 ## Install on a fresh Ubuntu VPS
 
 Clone this repository on your VPS, then run:
@@ -35,7 +45,7 @@ A published curl bootstrap URL is not included; use a clone from your own truste
 1. Upload your project using your existing SSH/SFTP account, for example to `/var/www/my-app`.
 2. Give the `hosty` user read and execute access to the project and its parent directories. App data directories must be writable by that user.
 3. Create a DNS A record for your domain pointing to the VPS public IP. The dashboard displays the host's resolved address, which may be private; check your VPS provider for the public IP.
-4. Select **New application**, enter a name, domain, runtime, and existing absolute directory.
+4. Select **New application**, enter a name, domain, runtime, and existing directory (an absolute path or `~/my-app`). `~` expands to the home directory of the user running the Hosty panel; the installed root service uses `/root`.
 
 Runtime conventions:
 

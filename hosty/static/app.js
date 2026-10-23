@@ -20,7 +20,7 @@ function render() {
   $('side-host').textContent = s.hostname;
   $('os').textContent = s.os;
   $('ip').textContent = s.ip;
-  $('server-status').textContent = '●  ' + (s.system ? 'Server online' : 'Local development');
+  $('server-status').textContent = '●  ' + (s.dev ? 'Development mode' : s.system ? 'Server online' : 'Configuration mode');
   const hours = Math.floor(s.uptime / 3600);
   $('uptime').textContent = hours >= 24 ? `${Math.floor(hours / 24)}d ${hours % 24}h` : `${hours}h ${Math.floor(s.uptime % 3600 / 60)}m`;
   const load = Math.round(s.load / s.cores * 100);
@@ -45,16 +45,18 @@ function render() {
   $('python-version').textContent = s.python;
   $('timezone').textContent = s.timezone;
   $('ssh-command').textContent = `ssh user@${s.ip}`;
-  const details = {'Hostname': s.hostname, 'IP address': s.ip, 'Operating system': s.os, 'CPU cores': s.cores, 'Python': s.python, 'Bun': s.bun, 'Timezone': s.timezone, 'Firewall': s.firewall, 'SSH / SFTP': s.ssh, 'Panel mode': s.system ? 'Ubuntu installation' : 'Local development'};
+  document.querySelector('input[name="domain"]').required = !s.dev;
+  $('domain-help').textContent = s.dev ? 'Optional in dev mode. Open your app using its localhost address.' : 'Point an A record to your server’s IP address.';
+  const details = {'Hostname': s.hostname, 'IP address': s.ip, 'Operating system': s.os, 'CPU cores': s.cores, 'Python': s.python, 'Bun': s.bun, 'Timezone': s.timezone, 'Firewall': s.firewall, 'SSH / SFTP': s.ssh, 'Panel mode': s.dev ? 'Development · localhost apps' : s.system ? 'Ubuntu installation' : 'Configuration only'};
   $('server-details').innerHTML = Object.entries(details).map(([key, value]) => `<dt>${escape(key)}</dt><dd>${escape(value)}</dd>`).join('');
   renderApps();
-  $('cert-list').innerHTML = state.apps.length ? state.apps.map(a => `<div class="cert-row"><div>${escape(a.domain)}<small>${a.ssl ? 'Let’s Encrypt · HTTPS enabled' : 'Certificate not issued'}</small></div><button class="${a.ssl ? 'secondary' : 'primary'}" data-cert="${a.id}">${a.ssl ? 'Renew certificate' : 'Enable HTTPS ↗'}</button></div>`).join('') : '<div class="empty">Add an application to manage its certificate.</div>';
+  $('cert-list').innerHTML = s.dev ? '<p class="notice">Development apps use local HTTP addresses. SSL is available when deployed to Ubuntu with a domain.</p>' : state.apps.length ? state.apps.map(a => `<div class="cert-row"><div>${escape(a.domain)}<small>${a.ssl ? 'Let’s Encrypt · HTTPS enabled' : 'Certificate not issued'}</small></div><button class="${a.ssl ? 'secondary' : 'primary'}" data-cert="${a.id}">${a.ssl ? 'Renew certificate' : 'Enable HTTPS ↗'}</button></div>`).join('') : '<div class="empty">Add an application to manage its certificate.</div>';
 }
 function renderApps() {
   const query = $('search').value.toLowerCase(), filter = $('status-filter').value;
-  const list = state.apps.filter(a => (a.name + ' ' + a.domain).toLowerCase().includes(query) && (filter === 'all' || a.status === filter));
+  const list = state.apps.filter(a => (a.name + ' ' + a.domain + ' ' + (a.local_url || '')).toLowerCase().includes(query) && (filter === 'all' || a.status === filter));
   $('table-count').textContent = `${list.length} application${list.length === 1 ? '' : 's'}`;
-  $('app-list').innerHTML = list.length ? list.map(a => `<div class="app-row"><div class="app-name"><div class="app-icon">${a.runtime === 'html' ? '⌘' : a.runtime === 'python' ? 'Py' : 'B'}</div><div><strong>${escape(a.name)}</strong><a href="${a.ssl ? 'https' : 'http'}://${escape(a.domain)}" target="_blank" rel="noopener">${escape(a.domain)} ↗</a></div></div><span class="app-status ${a.status}"><i></i>${a.status[0].toUpperCase() + a.status.slice(1)}</span><span class="runtime-label"><b>${a.runtime === 'html' ? '〈/〉' : a.runtime === 'python' ? '◈' : '◉'}</b>${{html: 'HTML',python: 'Python',bun: 'Bun'}[a.runtime]}</span><button class="ssl-label ${a.ssl ? '' : 'off'}" data-cert="${a.id}" title="Manage SSL">${a.ssl ? '♧ Secure' : '♧ Enable'}</button><div class="app-actions"><button title="${a.status === 'running' ? 'Stop' : 'Start'} application" data-action="${a.status === 'running' ? 'stop' : 'start'}" data-id="${a.id}">${a.status === 'running' ? 'Ⅱ' : '▷'}</button><button title="Restart application" data-action="restart" data-id="${a.id}">↻</button><button title="View application logs" data-action="logs" data-id="${a.id}">≡</button></div></div>`).join('') : `<div class="empty"><div class="empty-symbol">✳</div><h3>${state.apps.length ? 'No applications match your search.' : 'Big ideas start with a little app.'}</h3><p>${state.apps.length ? 'Try another name or status.' : 'Give your first project a place to call home.'}</p>${state.apps.length ? '' : '<button class="secondary" id="empty-add">＋ Add your first application</button>'}</div>`;
+  $('app-list').innerHTML = list.length ? list.map(a => `<div class="app-row"><div class="app-name"><div class="app-icon">${a.runtime === 'html' ? '⌘' : a.runtime === 'python' ? 'Py' : 'B'}</div><div><strong>${escape(a.name)}</strong><a href="${escape(a.local_url || (a.domain ? (a.ssl ? 'https' : 'http') + '://' + a.domain : '#'))}" target="_blank" rel="noopener">${escape(a.local_url || a.domain || 'No domain')} ↗</a></div></div><span class="app-status ${a.status}"><i></i>${a.status[0].toUpperCase() + a.status.slice(1)}</span><span class="runtime-label"><b>${a.runtime === 'html' ? '〈/〉' : a.runtime === 'python' ? '◈' : '◉'}</b>${{html: 'HTML',python: 'Python',bun: 'Bun'}[a.runtime]}</span><button class="ssl-label ${a.ssl ? '' : 'off'}" data-cert="${a.id}" title="Manage SSL" ${state.server.dev ? 'disabled' : ''}>${state.server.dev ? 'Local HTTP' : a.ssl ? '♧ Secure' : '♧ Enable'}</button><div class="app-actions"><button title="${a.status === 'running' ? 'Stop' : 'Start'} application" data-action="${a.status === 'running' ? 'stop' : 'start'}" data-id="${a.id}">${a.status === 'running' ? 'Ⅱ' : '▷'}</button><button title="Restart application" data-action="restart" data-id="${a.id}">↻</button><button title="View application logs" data-action="logs" data-id="${a.id}">≡</button></div></div>`).join('') : `<div class="empty"><div class="empty-symbol">✳</div><h3>${state.apps.length ? 'No applications match your search.' : 'Big ideas start with a little app.'}</h3><p>${state.apps.length ? 'Try another name or status.' : 'Give your first project a place to call home.'}</p>${state.apps.length ? '' : '<button class="secondary" id="empty-add">＋ Add your first application</button>'}</div>`;
   if ($('empty-add')) $('empty-add').onclick = openApp;
 }
 function navigate(next) {
@@ -79,7 +81,7 @@ $('status-filter').onchange = renderApps;
 $('app-form').onchange = () => { $('runtime-help').textContent = {python:'Use a .venv with uvicorn installed and a main.py exporting app.',bun:'Use a package.json with a start script. Your app must read PORT and HOST.',html:'This directory should contain your index.html and static assets.'}[new FormData($('app-form')).get('runtime')]; };
 $('app-form').onsubmit = async e => {
   e.preventDefault(); $('create-button').disabled = true; $('form-error').textContent = '';
-  try { await api('apps', Object.fromEntries(new FormData(e.target))); await refresh(); $('app-dialog').close(); toast(state.server.system ? 'Application deployed. Welcome home.' : 'Application configured. Deploy on Ubuntu to start it.'); }
+  try { const created = await api('apps', Object.fromEntries(new FormData(e.target))); await refresh(); $('app-dialog').close(); toast(created.warning || (state.server.dev ? `Application running at ${created.local_url}` : state.server.system ? 'Application deployed. Welcome home.' : 'Application configured. Use --dev to run locally.')); }
   catch(error) { $('form-error').textContent = error.message; }
   finally { $('create-button').disabled = false; }
 };

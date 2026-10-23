@@ -44,13 +44,14 @@ def main():
     serve = commands.add_parser('serve')
     serve.add_argument('--host', default='127.0.0.1')
     serve.add_argument('--port', type=int, default=8787)
+    serve.add_argument('--dev', action='store_true', help='Run apps locally and show localhost URLs; no domain or Ubuntu required')
     commands.add_parser('install')
     args = parser.parse_args()
     if args.command == 'install':
         install()
     else:
         from .server import serve as run
-        run(args.host, args.port)
+        run(args.host, args.port, dev=args.dev)
 
 if __name__ == '__main__':
     main()
