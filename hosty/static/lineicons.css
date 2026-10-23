@@ -1,0 +1,88 @@
+/* Lineicons 5.0 free — https://lineicons.com — see lineicons-LICENSE.txt */
+@font-face {
+  font-family: 'Lineicons';
+  src: url('/lineicons.woff2') format('woff2');
+  font-style: normal;
+  font-weight: normal;
+  font-display: block;
+}
+.lni {
+  display: inline-block;
+  font: normal normal normal 1em/1 'Lineicons';
+  color: inherit;
+  flex-shrink: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.lni-arrow-angular-top-right::before {
+  content: "\ea24";
+}
+.lni-arrow-right::before {
+  content: "\ea2a";
+}
+.lni-check-circle-1::before {
+  content: "\ea79";
+}
+.lni-code-1::before {
+  content: "\ea93";
+}
+.lni-dashboard-square-1::before {
+  content: "\eaa7";
+}
+.lni-database-2::before {
+  content: "\eaa8";
+}
+.lni-exit::before {
+  content: "\ead1";
+}
+.lni-file-multiple::before {
+  content: "\eade";
+}
+.lni-file-pencil::before {
+  content: "\eadf";
+}
+.lni-flower-2::before {
+  content: "\eaeb";
+}
+.lni-gauge-1::before {
+  content: "\eaf4";
+}
+.lni-heart::before {
+  content: "\eb13";
+}
+.lni-javascript::before {
+  content: "\eb2b";
+}
+.lni-layers-1::before {
+  content: "\eb37";
+}
+.lni-pause::before {
+  content: "\eb8c";
+}
+.lni-play::before {
+  content: "\eb9d";
+}
+.lni-plus::before {
+  content: "\eba1";
+}
+.lni-python::before {
+  content: "\ebae";
+}
+.lni-refresh-circle-1-clockwise::before {
+  content: "\ebb5";
+}
+.lni-search-1::before {
+  content: "\ebc7";
+}
+.lni-shield-2-check::before {
+  content: "\ebd3";
+}
+.lni-stopwatch::before {
+  content: "\ebf9";
+}
+.lni-unlocked-2::before {
+  content: "\ec2a";
+}
+.lni-xmark::before {
+  content: "\ec52";
+}

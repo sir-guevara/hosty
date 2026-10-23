@@ -212,12 +212,12 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/api/overview':
                 return self.reply({'server': metrics(), 'apps': [status(a) for a in apps()]})
             return self.reply({'error': 'Not found'}, 404)
-        filename = {'/': 'index.html', '/style.css': 'style.css', '/app.js': 'app.js'}.get(self.path.split('?')[0])
+        filename = {'/': 'index.html', '/style.css': 'style.css', '/app.js': 'app.js', '/lineicons.css': 'lineicons.css', '/lineicons.woff2': 'lineicons.woff2'}.get(self.path.split('?')[0])
         if not filename:
             return self.reply({'error': 'Not found'}, 404)
         body = (Path(__file__).parent / 'static' / filename).read_bytes()
         self.send_response(200)
-        self.send_header('Content-Type', {'html': 'text/html', 'css': 'text/css', 'js': 'application/javascript'}[filename.split('.')[-1]])
+        self.send_header('Content-Type', {'html': 'text/html', 'css': 'text/css', 'js': 'application/javascript', 'woff2': 'font/woff2'}[filename.split('.')[-1]])
         self.send_header('Content-Length', str(len(body)))
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.end_headers()

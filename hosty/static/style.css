@@ -390,3 +390,17 @@ footer { gap: 16px; flex-wrap: wrap; }
   .banner-right small, .status-tag { font-size: 11px; }
 
 }
+
+/* Lineicons share the interface color; text keeps its monospace font. */
+.lni { vertical-align: -0.12em; }
+nav button .lni { font-size: 20px; }
+.primary .lni, .secondary .lni { font-size: 16px; }
+.copy .lni, .app-actions .lni { font-size: 17px; }
+.app-actions button { display: inline-flex; align-items: center; justify-content: center; }
+.app-icon .lni { font-size: 20px; }
+.runtime-label b { display: inline-flex; align-items: center; }
+.runtime-label .lni { font-size: 14px; }
+.app-name a .lni { font-size: 11px; }
+.status-tag { display: inline-flex; align-items: center; gap: 6px; }
+.status-tag .lni { font-size: 13px; }
+.close { display: inline-flex; align-items: center; justify-content: center; }
