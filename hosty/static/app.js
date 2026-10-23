@@ -48,6 +48,7 @@ function render() {
   $('timezone').textContent = s.timezone;
   $('ssh-command').textContent = `ssh user@${s.ip}`;
   document.querySelector('input[name="domain"]').required = !s.dev;
+  $('path-help').textContent = `Directory on ${s.hostname}. ~/ expands to ${s.app_home}/. Use the full path if your project is elsewhere.`;
   $('domain-help').textContent = s.dev ? 'Optional in dev mode. Open your app using its localhost address.' : 'Point an A record to your server’s IP address.';
   const details = {'Hostname': s.hostname, 'IP address': s.ip, 'Operating system': s.os, 'CPU cores': s.cores, 'Python': s.python, 'Bun': s.bun, 'Timezone': s.timezone, 'Firewall': s.firewall, 'SSH / SFTP': s.ssh, 'Panel mode': s.dev ? 'Development · localhost apps' : s.system ? 'Ubuntu installation' : 'Configuration only'};
   $('server-details').innerHTML = Object.entries(details).map(([key, value]) => `<dt>${escape(key)}</dt><dd>${escape(value)}</dd>`).join('');

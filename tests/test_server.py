@@ -71,6 +71,9 @@ class PanelTest(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as ctx:
                 self.request('/api/apps', {'name': 'Missing app', 'domain': 'missing.example.com', 'runtime': 'html', 'path': '~/missing'})
             self.assertEqual(ctx.exception.code, 400)
+            error = json.load(ctx.exception)['error']
+            self.assertIn(f'Directory not found on the Hosty server: {self.temp.name}/missing', error)
+            self.assertIn(f'~ expands to {self.temp.name}', error)
         self.assertEqual(server.apps(), [])
 
     def test_unknown_file_not_exposed(self):

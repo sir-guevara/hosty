@@ -8,6 +8,7 @@ import secrets
 import shutil
 import socket
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -61,7 +62,7 @@ def metrics():
         ip = socket.gethostbyname(socket.gethostname())
     except OSError:
         ip = '127.0.0.1'
-    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'firewall': 'Unverified', 'ssh': 'Managed on server'}
+    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'app_home': os.path.expanduser('~'), 'firewall': 'Unverified', 'ssh': 'Managed on server'}
 
 
 def status(item):
@@ -249,8 +250,16 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Enter a valid domain, such as app.example.com.')
                 if runtime not in ('python', 'bun', 'html'):
                     raise ValueError('Choose a supported runtime.')
-                if not re.fullmatch(r'/[A-Za-z0-9_./-]+', path) or '..' in path.split('/') or not Path(path).is_dir():
-                    raise ValueError('Enter an existing absolute directory or ~/ path using letters, numbers, /, _, - or dots. ~ uses the home directory of the user running Hosty.')
+                if not re.fullmatch(r'/[A-Za-z0-9_./-]+', path) or '..' in path.split('/'):
+                    raise ValueError(f'Invalid directory path: {path!r}. Use an absolute path or ~/ with letters, numbers, /, _, - or dots.')
+                try:
+                    mode = Path(path).stat().st_mode
+                except FileNotFoundError:
+                    raise ValueError(f'Directory not found on the Hosty server: {path}. ~ expands to {os.path.expanduser("~")}. Enter the full path to your project on this machine.')
+                except PermissionError:
+                    raise ValueError(f'Hosty cannot access {path}. Give the user running Hosty permission to traverse this directory and its parent directories.')
+                if not stat.S_ISDIR(mode):
+                    raise ValueError(f'App path is a file, not a directory: {path}. Select the folder containing your app.')
                 if domain and any(a['domain'] == domain for a in items):
                     raise ValueError('This domain is already assigned to an app.')
                 item = {'id': secrets.token_hex(6), 'name': name, 'domain': domain, 'path': path, 'runtime': runtime, 'port': max([a['port'] for a in items] + [8999]) + 1, 'created': time.time(), 'ssl': False}
