@@ -11,7 +11,7 @@ class DependenciesTest(unittest.TestCase):
     @patch('hosty.server.command')
     @patch.object(Path, 'write_text')
     def test_python_apps_use_installed_runtime_or_project_venv(self, write, command):
-        item = {'id': 'abcdef123456', 'runtime': 'python', 'path': '/var/www/app', 'port': 9000, 'domain': 'example.com'}
+        item = {'id': 'abcdef123456', 'runtime': 'python', 'path': '/var/www/app', 'port': 9000, 'domain': 'example.com', 'environment': 'production'}
         for has_venv, executable in [(False, '/usr/bin/python3'), (True, '/var/www/app/.venv/bin/python')]:
             with self.subTest(has_venv=has_venv), patch.object(Path, 'is_file', return_value=has_venv):
                 write.reset_mock()
@@ -74,3 +74,39 @@ class DependenciesTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class PanelAliasTest(unittest.TestCase):
+    def test_alias_added_once_and_other_entries_preserved(self):
+        import tempfile
+        from hosty.cli import configure_panel_alias
+        with tempfile.TemporaryDirectory() as directory:
+            hosts = Path(directory) / 'hosts'
+            hosts.write_text('127.0.0.1 localhost\n192.0.2.1 example.test\n')
+            configure_panel_alias(hosts)
+            configure_panel_alias(hosts)
+            text = hosts.read_text()
+            self.assertEqual(text.count('hosty.local'), 1)
+            self.assertIn('127.0.0.1 hosty.local', text)
+            self.assertIn('192.0.2.1 example.test', text)
+
+    def test_conflicting_alias_is_not_overwritten(self):
+        import tempfile
+        from hosty.cli import configure_panel_alias
+        with tempfile.TemporaryDirectory() as directory:
+            hosts = Path(directory) / 'hosts'
+            original = '192.0.2.1 hosty.local\n'
+            hosts.write_text(original)
+            with self.assertRaises(RuntimeError):
+                configure_panel_alias(hosts)
+            self.assertEqual(hosts.read_text(), original)
+
+    @patch('hosty.server.command')
+    @patch.object(Path, 'unlink')
+    @patch.object(Path, 'write_text')
+    def test_development_service_has_no_public_nginx_route(self, write, unlink, command):
+        item = {'id': 'abcdef123456', 'runtime': 'html', 'path': '/var/www/app', 'port': 9000, 'domain': 'example.com', 'environment': 'development'}
+        provision(item)
+        self.assertEqual(write.call_count, 1)
+        self.assertIn('--bind 127.0.0.1', write.call_args.args[0])
+        self.assertIn('NODE_ENV=development', write.call_args.args[0])
+        unlink.assert_called_once_with(missing_ok=True)

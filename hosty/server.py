@@ -66,11 +66,26 @@ def metrics():
     return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'app_home': app_home(), 'firewall': 'Unverified', 'ssh': 'Managed on server'}
 
 
+def development_domain(item):
+    if item.get('dev_domain'):
+        return item['dev_domain']
+    label = re.sub(r'[^a-z0-9-]+', '-', (item.get('domain') or item['name']).lower().split('.')[0]).strip('-')[:63].rstrip('-')
+    return (label or item['id']) + '.localhost'
+
+
+def environment(item):
+    return item.get('environment', 'development' if DEV or not SYSTEM else 'production')
+
+
 def status(item):
     result = dict(item)
     result['status'] = 'configured'
-    result['local_url'] = f'http://localhost:{item["port"]}' if DEV else None
-    if DEV:
+    result['dev_domain'] = development_domain(item)
+    result['dev_url'] = f'http://{result["dev_domain"]}:{item["port"]}'
+    result['production_url'] = (('https' if item.get('ssl') else 'http') + '://' + item['domain']) if item.get('domain') else None
+    result['environment'] = environment(item)
+    result['local_url'] = result['dev_url'] if environment(item) == 'development' else None
+    if not SYSTEM and environment(item) == 'development':
         process = PROCESSES.get(item['id'])
         result['status'] = 'running' if process and process.poll() is None else 'stopped'
     elif SYSTEM:
@@ -127,7 +142,7 @@ def start_local(item):
     logs = DATA / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
     with (logs / f'{item["id"]}.log').open('ab') as output:
-        process = subprocess.Popen(args, cwd=item['path'], env={**os.environ, 'HOST': '127.0.0.1', 'PORT': str(port)}, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        process = subprocess.Popen(args, cwd=item['path'], env={**os.environ, 'HOST': '127.0.0.1', 'PORT': str(port), 'NODE_ENV': 'development'}, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
     PROCESSES[item['id']] = process
     # Catch immediate startup failures instead of reporting a broken link as running.
     for _ in range(30):
@@ -167,6 +182,7 @@ Group=hosty
 WorkingDirectory={path}
 Environment=PORT={port}
 Environment=HOST=127.0.0.1
+Environment=NODE_ENV={'production' if environment(item) == 'production' else 'development'}
 ExecStart={executable}
 Restart=on-failure
 NoNewPrivileges=true
@@ -188,11 +204,16 @@ WantedBy=multi-user.target
     }}
 }}
 '''
-    Path(f'/etc/nginx/conf.d/hosty-{ident}.conf').write_text(config)
+    nginx_path = Path(f'/etc/nginx/conf.d/hosty-{ident}.conf')
+    if environment(item) == 'production':
+        nginx_path.write_text(config)
+    else:
+        nginx_path.unlink(missing_ok=True)
     command(['nginx', '-t'])
     command(['systemctl', 'daemon-reload'])
-    command(['systemctl', 'enable', '--now', f'hosty-app-{ident}'])
     command(['systemctl', 'reload', 'nginx'])
+    command(['systemctl', 'enable', f'hosty-app-{ident}'])
+    command(['systemctl', 'restart', f'hosty-app-{ident}'])
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -241,28 +262,36 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/api/apps':
                 name = str(data.get('name', '')).strip()
                 domain = str(data.get('domain', '')).strip().lower()
+                dev_domain = str(data.get('dev_domain', '')).strip().lower()
                 path = str(data.get('path', '')).strip()
                 path = expand_app_path(path)
                 runtime = data.get('runtime')
+                mode = data.get('environment', 'production' if SYSTEM and not DEV else 'development')
+                if mode not in ('development', 'production'):
+                    raise ValueError('Choose Development or Production.')
+                if mode == 'production' and not SYSTEM:
+                    raise ValueError('Production requires an Ubuntu installation. Choose Development to run locally.')
                 if not name or len(name) > 64:
                     raise ValueError('App name must be 1–64 characters.')
-                if not (DEV and not domain) and (len(domain) > 253 or '.' not in domain or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in domain.split('.'))):
+                if not (mode == 'development' and not domain) and (len(domain) > 253 or '.' not in domain or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in domain.split('.'))):
                     raise ValueError('Enter a valid domain, such as app.example.com.')
+                if dev_domain and not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.localhost', dev_domain):
+                    raise ValueError('Use a development hostname such as my-app.localhost, or leave it blank for an automatic address.')
                 if runtime not in ('python', 'bun', 'html'):
                     raise ValueError('Choose a supported runtime.')
                 if not re.fullmatch(r'/[A-Za-z0-9_./-]+', path) or '..' in path.split('/'):
                     raise ValueError(f'Invalid directory path: {path!r}. Use an absolute path or ~/ with letters, numbers, /, _, - or dots.')
                 try:
-                    mode = Path(path).stat().st_mode
+                    directory_mode = Path(path).stat().st_mode
                 except FileNotFoundError:
                     raise ValueError(f'Directory not found on the Hosty server: {path}. ~ expands to {app_home()}. Enter the full path to your project on this machine.')
                 except PermissionError:
                     raise ValueError(f'Hosty cannot access {path}. Give the user running Hosty permission to traverse this directory and its parent directories.')
-                if not stat.S_ISDIR(mode):
+                if not stat.S_ISDIR(directory_mode):
                     raise ValueError(f'App path is a file, not a directory: {path}. Select the folder containing your app.')
                 if domain and any(a['domain'] == domain for a in items):
                     raise ValueError('This domain is already assigned to an app.')
-                item = {'id': secrets.token_hex(6), 'name': name, 'domain': domain, 'path': path, 'runtime': runtime, 'port': max([a['port'] for a in items] + [8999]) + 1, 'created': time.time(), 'ssl': False}
+                item = {'id': secrets.token_hex(6), 'name': name, 'domain': domain, 'dev_domain': dev_domain, 'path': path, 'runtime': runtime, 'port': max([a['port'] for a in items] + [8999]) + 1, 'created': time.time(), 'ssl': False, 'environment': mode}
                 if SYSTEM:
                     try:
                         provision(item)
@@ -275,7 +304,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise
                 items.append(item)
                 save(items)
-                if DEV:
+                if not SYSTEM and mode == 'development':
                     try:
                         start_local(item)
                     except (ValueError, OSError) as error:
@@ -283,14 +312,53 @@ class Handler(BaseHTTPRequestHandler):
                         result['warning'] = str(error)
                         return self.reply(result, 201)
                 return self.reply(status(item), 201)
-            match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/(start|stop|restart|ssl|logs)', self.path)
+            match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/(start|stop|restart|ssl|logs|environment)', self.path)
             if not match:
                 return self.reply({'error': 'Not found'}, 404)
             ident, action = match.groups()
             item = next((a for a in items if a['id'] == ident), None)
             if not item:
                 return self.reply({'error': 'App not found'}, 404)
-            if DEV:
+            if action == 'environment':
+                mode = data.get('environment')
+                if mode not in ('development', 'production'):
+                    raise ValueError('Choose Development or Production.')
+                domain = str(data.get('domain', item.get('domain', ''))).strip().lower()
+                if mode == 'production':
+                    if not SYSTEM:
+                        raise ValueError('Production requires an Ubuntu installation.')
+                    if len(domain) > 253 or '.' not in domain or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in domain.split('.')):
+                        raise ValueError('Enter a valid production domain, such as app.example.com.')
+                    if any(a['id'] != ident and a['domain'] == domain for a in items):
+                        raise ValueError('This domain is already assigned to an app.')
+                if mode == environment(item):
+                    return self.reply(status(item))
+                candidate = {**item, 'domain': domain, 'environment': mode, 'ssl': False}
+                if SYSTEM:
+                    paths = [Path(f'/etc/systemd/system/hosty-app-{ident}.service'), Path(f'/etc/nginx/conf.d/hosty-{ident}.conf')]
+                    backups = {path: path.read_text() if path.exists() else None for path in paths}
+                    was_running = status(item)['status'] == 'running'
+                    try:
+                        provision(candidate)
+                    except (ValueError, OSError, subprocess.TimeoutExpired):
+                        for path, content in backups.items():
+                            if content is None:
+                                path.unlink(missing_ok=True)
+                            else:
+                                path.write_text(content)
+                        command(['systemctl', 'daemon-reload'])
+                        command(['systemctl', 'reload', 'nginx'])
+                        command(['systemctl', 'restart' if was_running else 'stop', f'hosty-app-{ident}'])
+                        raise
+                else:
+                    stop_local(ident)
+                    start_local(candidate)
+                item.update(candidate)
+                save(items)
+                return self.reply(status(item))
+            if action == 'ssl' and environment(item) != 'production':
+                raise ValueError('Switch this app to Production to enable SSL.')
+            if not SYSTEM and environment(item) == 'development':
                 if action == 'ssl':
                     raise ValueError('Development apps use local HTTP. SSL requires an Ubuntu installation and domain.')
                 if action == 'logs':
@@ -304,6 +372,8 @@ class Handler(BaseHTTPRequestHandler):
                     stop_local(ident)
                 if action in ('start', 'restart'):
                     start_local(item)
+                item['autostart'] = action != 'stop'
+                save(items)
                 return self.reply(status(item))
             if not SYSTEM:
                 raise ValueError('Service controls require an Ubuntu installation. Run sudo hosty install on your VPS.')
@@ -337,6 +407,13 @@ def serve(host, port, dev=False):
         TOKEN = token_file.read_text().strip()
     print(f'Hosty is ready at http://{host}:{port}\nPanel token: {TOKEN}', flush=True)
     http = ThreadingHTTPServer((host, port), Handler)
+    if not SYSTEM:
+        for item in apps():
+            if environment(item) == 'development' and item.get('autostart', True):
+                try:
+                    start_local(item)
+                except (ValueError, OSError) as error:
+                    print(f'Could not start {item["name"]}: {error}', flush=True)
     try:
         http.serve_forever()
     except KeyboardInterrupt:

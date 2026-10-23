@@ -70,6 +70,18 @@ def install_bun():
     return str(link)
 
 
+def configure_panel_alias(hosts_path=Path('/etc/hosts')):
+    text = hosts_path.read_text()
+    for line in text.splitlines():
+        fields = line.split('#', 1)[0].split()
+        if len(fields) > 1 and 'hosty.local' in fields[1:]:
+            if fields[0] != '127.0.0.1':
+                raise RuntimeError('hosty.local already points elsewhere in /etc/hosts. Update it to 127.0.0.1 and rerun install.')
+            return
+    with hosts_path.open('a') as output:
+        output.write(('' if text.endswith('\n') else '\n') + '127.0.0.1 hosty.local # Hosty panel\n')
+
+
 def install():
     if os.geteuid() != 0 or not Path('/etc/debian_version').exists():
         raise SystemExit('Run sudo hosty install on an Ubuntu server.')
@@ -77,6 +89,7 @@ def install():
         raise SystemExit('Hosty installation requires an Ubuntu server running systemd.')
     os.environ['PATH'] = SYSTEM_PATH
     install_dependencies()
+    configure_panel_alias()
     root = Path('/opt/hosty')
     root.mkdir(exist_ok=True)
     root.chmod(0o755)
@@ -121,7 +134,7 @@ WantedBy=multi-user.target
     subprocess.run(['systemctl', 'is-active', '--quiet', 'hosty'], check=True)
     print(f'Dependencies ready. Bun: {bun}. Python ASGI runtime: /usr/bin/python3.', flush=True)
     print('Hosty installed. Connect securely with: ssh -L 8787:127.0.0.1:8787 root@YOUR_SERVER')
-    print('Open http://localhost:8787. Your panel token is in /etc/hosty.env.')
+    print('Open http://hosty.local:8787 on this machine (or localhost:8787 through your SSH tunnel). Your panel token is in /etc/hosty.env.')
 
 
 def main():

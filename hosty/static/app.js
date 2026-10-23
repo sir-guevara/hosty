@@ -22,7 +22,7 @@ function render() {
   $('side-host').textContent = s.hostname;
   $('os').textContent = s.os;
   $('ip').textContent = s.ip;
-  $('server-status').innerHTML = icon('check-circle-1') + ' ' + (s.dev ? 'Development mode' : s.system ? 'Server online' : 'Configuration mode');
+  $('server-status').innerHTML = icon('check-circle-1') + ' ' + (s.system ? 'Server online' : 'Local development');
   const hours = Math.floor(s.uptime / 3600);
   $('uptime').textContent = hours >= 24 ? `${Math.floor(hours / 24)}d ${hours % 24}h` : `${hours}h ${Math.floor(s.uptime % 3600 / 60)}m`;
   const load = Math.round(s.load / s.cores * 100);
@@ -47,19 +47,19 @@ function render() {
   $('python-version').textContent = s.python;
   $('timezone').textContent = s.timezone;
   $('ssh-command').textContent = `ssh user@${s.ip}`;
-  document.querySelector('input[name="domain"]').required = !s.dev;
+  updateFormEnvironment();
   $('path-help').textContent = `Directory on ${s.hostname}. ~/ expands to ${s.app_home}/. Use the full path if your project is elsewhere.`;
-  $('domain-help').textContent = s.dev ? 'Optional in dev mode. Open your app using its localhost address.' : 'Point an A record to your server’s IP address.';
-  const details = {'Hostname': s.hostname, 'IP address': s.ip, 'Operating system': s.os, 'CPU cores': s.cores, 'Python': s.python, 'Bun': s.bun, 'Timezone': s.timezone, 'Firewall': s.firewall, 'SSH / SFTP': s.ssh, 'Panel mode': s.dev ? 'Development · localhost apps' : s.system ? 'Ubuntu installation' : 'Configuration only'};
+  const details = {'Hostname': s.hostname, 'IP address': s.ip, 'Operating system': s.os, 'CPU cores': s.cores, 'Python': s.python, 'Bun': s.bun, 'Timezone': s.timezone, 'Firewall': s.firewall, 'SSH / SFTP': s.ssh, 'Panel mode': s.system ? 'Ubuntu · per-app environments' : 'Local development'};
   $('server-details').innerHTML = Object.entries(details).map(([key, value]) => `<dt>${escape(key)}</dt><dd>${escape(value)}</dd>`).join('');
   renderApps();
-  $('cert-list').innerHTML = s.dev ? '<p class="notice">Development apps use local HTTP addresses. SSL is available when deployed to Ubuntu with a domain.</p>' : state.apps.length ? state.apps.map(a => `<div class="cert-row"><div>${escape(a.domain)}<small>${a.ssl ? 'Let’s Encrypt · HTTPS enabled' : 'Certificate not issued'}</small></div><button class="${a.ssl ? 'secondary' : 'primary'}" data-cert="${a.id}">${a.ssl ? 'Renew certificate' : 'Enable HTTPS ' + icon('arrow-angular-top-right')}</button></div>`).join('') : '<div class="empty">Add an application to manage its certificate.</div>';
+  const productionApps = state.apps.filter(a => a.environment === 'production');
+  $('cert-list').innerHTML = productionApps.length ? productionApps.map(a => `<div class="cert-row"><div>${escape(a.domain)}<small>${a.ssl ? 'Let’s Encrypt · HTTPS enabled' : 'Certificate not issued'}</small></div><button class="${a.ssl ? 'secondary' : 'primary'}" data-cert="${a.id}">${a.ssl ? 'Renew certificate' : 'Enable HTTPS ' + icon('arrow-angular-top-right')}</button></div>`).join('') : '<div class="empty">Switch an app to Production to configure SSL.</div>';
 }
 function renderApps() {
   const query = $('search').value.toLowerCase(), filter = $('status-filter').value;
   const list = state.apps.filter(a => (a.name + ' ' + a.domain + ' ' + (a.local_url || '')).toLowerCase().includes(query) && (filter === 'all' || a.status === filter));
   $('table-count').textContent = `${list.length} application${list.length === 1 ? '' : 's'}`;
-  $('app-list').innerHTML = list.length ? list.map(a => `<div class="app-row"><div class="app-name"><div class="app-icon">${runtimeIcon(a.runtime)}</div><div><strong>${escape(a.name)}</strong><a href="${escape(a.local_url || (a.domain ? (a.ssl ? 'https' : 'http') + '://' + a.domain : '#'))}" target="_blank" rel="noopener">${escape(a.local_url || a.domain || 'No domain')} ${icon('arrow-angular-top-right')}</a></div></div><span class="app-status ${a.status}"><i></i>${a.status[0].toUpperCase() + a.status.slice(1)}</span><span class="runtime-label"><b>${runtimeIcon(a.runtime)}</b>${{html: 'HTML',python: 'Python',bun: 'Bun'}[a.runtime]}</span><button class="ssl-label ${a.ssl ? '' : 'off'}" data-cert="${a.id}" title="Manage SSL" ${state.server.dev ? 'disabled' : ''}>${icon(a.ssl ? 'shield-2-check' : 'unlocked-2')} ${state.server.dev ? 'Local HTTP' : a.ssl ? 'Secure' : 'Enable'}</button><div class="app-actions"><button title="${a.status === 'running' ? 'Stop' : 'Start'} application" aria-label="${a.status === 'running' ? 'Stop' : 'Start'} application" data-action="${a.status === 'running' ? 'stop' : 'start'}" data-id="${a.id}">${icon(a.status === 'running' ? 'pause' : 'play')}</button><button title="Restart application" aria-label="Restart application" data-action="restart" data-id="${a.id}">${icon('refresh-circle-1-clockwise')}</button><button title="View application logs" aria-label="View application logs" data-action="logs" data-id="${a.id}">${icon('file-pencil')}</button></div></div>`).join('') : `<div class="empty"><div class="empty-symbol">${icon('flower-2')}</div><h3>${state.apps.length ? 'No applications match your search.' : 'Big ideas start with a little app.'}</h3><p>${state.apps.length ? 'Try another name or status.' : 'Give your first project a place to call home.'}</p>${state.apps.length ? '' : `<button class="secondary" id="empty-add">${icon('plus')} Add your first application</button>`}</div>`;
+  $('app-list').innerHTML = list.length ? list.map(a => `<div class="app-row"><div class="app-name"><div class="app-icon">${runtimeIcon(a.runtime)}</div><div><strong>${escape(a.name)}</strong><a href="${escape(a.local_url || (a.domain ? (a.ssl ? 'https' : 'http') + '://' + a.domain : '#'))}" target="_blank" rel="noopener">${escape(a.local_url || a.domain || 'No domain')} ${icon('arrow-angular-top-right')}</a><div class="environment-links"><select class="environment-select" aria-label="Environment for ${escape(a.name)}" data-environment="${a.id}"><option value="development" ${a.environment === 'development' ? 'selected' : ''}>DEV</option><option value="production" ${a.environment === 'production' ? 'selected' : ''}>PROD</option></select>${a.environment === 'development' ? (a.production_url ? `<span>Prod: <a href="${escape(a.production_url)}" target="_blank" rel="noopener">${escape(a.domain)} ${icon('arrow-angular-top-right')}</a></span>` : '<span>Production domain not configured</span>') : `<span>Dev: <a href="${escape(a.dev_url)}" target="_blank" rel="noopener">${escape(a.dev_url)} ${icon('arrow-angular-top-right')}</a></span>`}</div></div></div><span class="app-status ${a.status}"><i></i>${a.status[0].toUpperCase() + a.status.slice(1)}</span><span class="runtime-label"><b>${runtimeIcon(a.runtime)}</b>${{html: 'HTML',python: 'Python',bun: 'Bun'}[a.runtime]}</span><button class="ssl-label ${a.ssl ? '' : 'off'}" data-cert="${a.id}" title="Manage SSL" ${a.environment === 'development' ? 'disabled' : ''}>${icon(a.ssl ? 'shield-2-check' : 'unlocked-2')} ${a.environment === 'development' ? 'Local HTTP' : a.ssl ? 'Secure' : 'Enable'}</button><div class="app-actions"><button title="${a.status === 'running' ? 'Stop' : 'Start'} application" aria-label="${a.status === 'running' ? 'Stop' : 'Start'} application" data-action="${a.status === 'running' ? 'stop' : 'start'}" data-id="${a.id}">${icon(a.status === 'running' ? 'pause' : 'play')}</button><button title="Restart application" aria-label="Restart application" data-action="restart" data-id="${a.id}">${icon('refresh-circle-1-clockwise')}</button><button title="View application logs" aria-label="View application logs" data-action="logs" data-id="${a.id}">${icon('file-pencil')}</button></div></div>`).join('') : `<div class="empty"><div class="empty-symbol">${icon('flower-2')}</div><h3>${state.apps.length ? 'No applications match your search.' : 'Big ideas start with a little app.'}</h3><p>${state.apps.length ? 'Try another name or status.' : 'Give your first project a place to call home.'}</p>${state.apps.length ? '' : `<button class="secondary" id="empty-add">${icon('plus')} Add your first application</button>`}</div>`;
   if ($('empty-add')) $('empty-add').onclick = openApp;
 }
 function navigate(next) {
@@ -75,16 +75,21 @@ function navigate(next) {
   $('server-page').hidden = page !== 'server';
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('selected', b.dataset.page === page));
 }
-function openApp() { $('app-form').reset(); $('form-error').textContent = ''; $('app-dialog').showModal(); }
+function updateFormEnvironment() {
+  const production = $('app-environment').value === 'production';
+  document.querySelector('input[name="domain"]').required = production;
+  $('domain-help').textContent = production ? 'Required. Point your DNS A record to this server.' : 'Optional production domain. Development uses its own local address.';
+}
+function openApp() { $('app-form').reset(); updateFormEnvironment(); $('form-error').textContent = ''; $('app-dialog').showModal(); }
 document.querySelectorAll('.add-app').forEach(b => b.onclick = openApp);
 document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => $('app-dialog').close());
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => navigate(b.dataset.page));
 $('search').oninput = renderApps;
 $('status-filter').onchange = renderApps;
-$('app-form').onchange = () => { $('runtime-help').textContent = {python:state.server.dev ? 'Use a .venv with uvicorn installed and a main.py exporting app.' : 'Expose app in main.py. Hosty supplies Uvicorn; a project .venv is optional.',bun:'Use a package.json with a start script. Your app must read PORT and HOST.',html:'This directory should contain your index.html and static assets.'}[new FormData($('app-form')).get('runtime')]; };
+$('app-form').onchange = () => { updateFormEnvironment(); $('runtime-help').textContent = {python:!state.server.system ? 'Use a .venv with uvicorn installed and a main.py exporting app.' : 'Expose app in main.py. Hosty supplies Uvicorn; a project .venv is optional.',bun:'Use a package.json with a start script. Your app must read PORT and HOST.',html:'This directory should contain your index.html and static assets.'}[new FormData($('app-form')).get('runtime')]; };
 $('app-form').onsubmit = async e => {
   e.preventDefault(); $('create-button').disabled = true; $('form-error').textContent = '';
-  try { const created = await api('apps', Object.fromEntries(new FormData(e.target))); await refresh(); $('app-dialog').close(); toast(created.warning || (state.server.dev ? `Application running at ${created.local_url}` : state.server.system ? 'Application deployed. Welcome home.' : 'Application configured. Use --dev to run locally.')); }
+  try { const created = await api('apps', Object.fromEntries(new FormData(e.target))); await refresh(); $('app-dialog').close(); toast(created.warning || (created.environment === 'development' ? `Application running at ${created.dev_url}` : state.server.system ? 'Application deployed. Welcome home.' : 'Application configured. Use --dev to run locally.')); }
   catch(error) { $('form-error').textContent = error.message; }
   finally { $('create-button').disabled = false; }
 };
@@ -120,3 +125,24 @@ document.addEventListener('click', async e => {
 });
 if (token) refresh().catch(() => {}); else $('auth-dialog').showModal();
 setInterval(() => { if (token && !$('auth-dialog').open) refresh().catch(() => {}); }, 15000);
+
+document.addEventListener('change', async e => {
+  const select = e.target.closest('[data-environment]');
+  if (!select) return;
+  const app = state.apps.find(a => a.id === select.dataset.environment);
+  const body = {environment: select.value};
+  if (select.value === 'production' && !app.domain) {
+    const domain = prompt('Production domain for this application (for example, app.example.com):');
+    if (!domain) { renderApps(); return; }
+    body.domain = domain;
+  }
+  select.disabled = true;
+  try {
+    await api(`apps/${select.dataset.environment}/environment`, body);
+    await refresh();
+    toast('Application environment updated.');
+  } catch (error) {
+    toast(error.message);
+    await refresh().catch(() => {});
+  } finally { select.disabled = false; }
+});

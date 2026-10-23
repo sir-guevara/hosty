@@ -8,17 +8,19 @@ A small hosting panel for your personal tools. A responsive dashboard, live serv
 python3 -m hosty.cli serve
 ```
 
-Open http://127.0.0.1:8787 and enter the token printed in your terminal. Apps are saved in `~/.local/share/hosty/apps.json`. Local mode saves configurations; deployment and service controls require an Ubuntu installation. Linux supplies system memory and server uptime; on macOS memory is unavailable and uptime measures the panel process. CPU is normalized one-minute load average, not instantaneous CPU utilization.
+Open http://127.0.0.1:8787 and enter the token printed in your terminal. Apps are saved in `~/.local/share/hosty/apps.json`. The panel runs development apps locally. Public production deployment requires an Ubuntu installation. Linux supplies system memory and server uptime; on macOS memory is unavailable and uptime measures the panel process. CPU is normalized one-minute load average, not instantaneous CPU utilization.
 
-## Development mode
+## Per-app environments
 
 ```sh
-python3 -m hosty.cli serve --dev
+python3 -m hosty.cli serve
 ```
 
-Add an app with its local directory; the domain is optional. Hosty starts the app and displays a clickable `http://localhost:9000` address (each app gets its own port). Existing apps can be started using the play button. Start, stop, restart, and logs work without Ubuntu, Nginx, or DNS. Python and Bun use the runtime conventions below; HTML works with just an `index.html`.
+Choose Development or Production in the app form or the DEV/PROD dropdown on an existing app. Both retain their development hostname and production domain. Development needs no domain; production requires Ubuntu and a domain. `serve --dev` remains a compatibility option, but is no longer required.
 
-Apps run as your current user and bind to loopback (Bun apps must honor `HOST` and `PORT`). Local addresses refer to the machine running Hosty. SSL is disabled in dev mode. Apps stop when you exit the panel; use the play button to start them after relaunching. Do not run dev mode alongside a production Hosty installation.
+Add an app with its local directory; the production domain is optional in Development. Hosty starts the app and displays a clickable `http://my-app.localhost:9000` development address (each app gets its own port). Existing apps can be started using the play button. Start, stop, restart, and logs work without Ubuntu, Nginx, or DNS. Python and Bun use the runtime conventions below; HTML works with just an `index.html`.
+
+Apps run as your current user and bind to loopback (Bun apps must honor `HOST` and `PORT`). Every app keeps its production domain separately from its development hostname. For example, `app.example.com` gets `app.localhost:9000`; you can also enter a custom `name.localhost` in the app form. Existing apps receive an automatic development hostname. The dashboard shows both addresses and uses the development address when that app is set to Development. Local addresses refer to the machine running Hosty. `.localhost` is reserved for loopback, so modern browsers resolve it locally without hosts-file edits; non-browser tools may need `localhost:PORT` or a resolver override. Apps must permit their development hostname in any host validation configuration. The port routes each local address to its own app; production routing still uses Nginx. SSL is available only for Production apps. Switching an installed app to Development removes its public Nginx route; switching back requires enabling SSL again. Installed Development apps use systemd as the hosty user and restart with the server, alongside Production apps. Local apps stop with the panel and restart when you relaunch it, unless explicitly stopped in the panel.
 
 ## Install on a fresh Ubuntu VPS
 
@@ -32,7 +34,7 @@ The bootstrap installs Python if it is missing, then runs `hosty install`. If Py
 
 Alternatively install this package in a virtual environment with `pip install .`, then run `sudo /path/to/venv/bin/hosty install`.
 
-The installer checks installed packages and installs missing dependencies: Python, pip, venv, Uvicorn, Python build tools, Nginx, Certbot with its Nginx plugin, curl, unzip, CA certificates, Git, OpenSSH/SFTP, and native build tools. It installs Bun system-wide using its official installer when no usable shared installation exists. Existing usable Bun installations are preserved. It verifies the runtimes and configuration, enables the services and certificate renewal timer, and installs a `hosty` command. Rerunning the installer keeps the existing panel token and app records. It binds the panel to localhost. Access it through an SSH tunnel:
+The installer checks installed packages and installs missing dependencies: Python, pip, venv, Uvicorn, Python build tools, Nginx, Certbot with its Nginx plugin, curl, unzip, CA certificates, Git, OpenSSH/SFTP, and native build tools. It installs Bun system-wide using its official installer when no usable shared installation exists. Existing usable Bun installations are preserved. It verifies the runtimes and configuration, enables the services and certificate renewal timer, and installs a `hosty` command. Rerunning the installer keeps the existing panel token and app records. It adds `127.0.0.1 hosty.local` to the installed machine’s hosts file and binds the panel to localhost. On that machine, open `http://hosty.local:8787`. A remote VPS cannot configure your laptop’s hosts file; use the SSH tunnel below and `http://localhost:8787` from your laptop. Access it through an SSH tunnel:
 
 ```sh
 ssh -L 8787:127.0.0.1:8787 your-user@your-server

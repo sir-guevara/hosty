@@ -404,3 +404,12 @@ nav button .lni { font-size: 20px; }
 .status-tag { display: inline-flex; align-items: center; gap: 6px; }
 .status-tag .lni { font-size: 13px; }
 .close { display: inline-flex; align-items: center; justify-content: center; }
+
+.environment-links { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; font-size: 11px; color: #52664f; }
+.environment-links a { font-size: 11px; }
+.environment-tag { padding: 1px 5px; border: 1px solid #aac795; background: #e0efcf; color: #2d5427; border-radius: 3px; font-size: 10px; font-weight: 600; }
+.app-row { padding-top: 14px; padding-bottom: 14px; }
+#app-dialog { max-height: calc(100vh - 40px); overflow-y: auto; }
+
+form > label > select { display: block; width: 100%; margin: 8px 0; padding: 11px 12px; color: #355a2c; }
+.environment-select { padding: 3px 5px; font-size: 11px; background: #e0efcf; color: #2d5427; }
