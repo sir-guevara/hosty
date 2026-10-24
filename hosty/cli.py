@@ -7,6 +7,7 @@ import tempfile
 import json
 from pathlib import Path
 from .paths import app_home
+from .auth import ensure_config
 
 
 PACKAGES = (
@@ -70,16 +71,16 @@ def install_bun():
     return str(link)
 
 
-def configure_panel_alias(hosts_path=Path('/etc/hosts')):
+def configure_panel_alias(hosts_path=Path('/etc/hosts'), domain='hosty.localhost'):
     text = hosts_path.read_text()
     for line in text.splitlines():
         fields = line.split('#', 1)[0].split()
-        if len(fields) > 1 and 'hosty.local' in fields[1:]:
+        if len(fields) > 1 and domain in fields[1:]:
             if fields[0] != '127.0.0.1':
-                raise RuntimeError('hosty.local already points elsewhere in /etc/hosts. Update it to 127.0.0.1 and rerun install.')
+                raise RuntimeError(f'{domain} already points elsewhere in /etc/hosts. Update it to 127.0.0.1 and rerun install.')
             return
     with hosts_path.open('a') as output:
-        output.write(('' if text.endswith('\n') else '\n') + '127.0.0.1 hosty.local # Hosty panel\n')
+        output.write(('' if text.endswith('\n') else '\n') + f'127.0.0.1 {domain} # Hosty panel\n')
 
 
 def install():
@@ -89,7 +90,6 @@ def install():
         raise SystemExit('Hosty installation requires an Ubuntu server running systemd.')
     os.environ['PATH'] = SYSTEM_PATH
     install_dependencies()
-    configure_panel_alias()
     root = Path('/opt/hosty')
     root.mkdir(exist_ok=True)
     root.chmod(0o755)
@@ -102,7 +102,21 @@ def install():
     subprocess.run(['/usr/bin/python3', '-c', 'import venv, pip, uvicorn'], check=True)
     subprocess.run(['certbot', 'plugins', '--init'], check=True)
     subprocess.run(['nginx', '-t'], check=True)
-    Path('/var/lib/hosty').mkdir(exist_ok=True)
+    data = Path('/var/lib/hosty')
+    data.mkdir(exist_ok=True)
+    os.chown(data, 0, 0)
+    data.chmod(0o755)
+    cache = Path('/var/cache/hosty')
+    cache.mkdir(parents=True, exist_ok=True)
+    shutil.chown(cache, user='hosty', group='hosty')
+    subprocess.run(['usermod', '--home', str(cache), 'hosty'], check=True)
+    config = ensure_config(data)
+    if config['domain'].endswith(('.localhost', '.local')):
+        configure_panel_alias(domain=config['domain'])
+    from . import server
+    server.SYSTEM = True
+    subprocess.run(['systemctl', 'enable', '--now', 'nginx'], check=True)
+    server.configure_panel_domain(config['domain'], 8787)
     token = secrets.token_urlsafe(32)
     env = Path('/etc/hosty.env')
     if not env.exists():
@@ -134,7 +148,8 @@ WantedBy=multi-user.target
     subprocess.run(['systemctl', 'is-active', '--quiet', 'hosty'], check=True)
     print(f'Dependencies ready. Bun: {bun}. Python ASGI runtime: /usr/bin/python3.', flush=True)
     print('Hosty installed. Connect securely with: ssh -L 8787:127.0.0.1:8787 root@YOUR_SERVER')
-    print('Open http://hosty.local:8787 on this machine (or localhost:8787 through your SSH tunnel). Your panel token is in /etc/hosty.env.')
+    print(f'Open http://{config["domain"]} on this machine. Username: {config["username"]}. Use your configured password.')
+    print('For a remote VPS, point the domain DNS to its public IP, or use http://localhost:8787 through the SSH tunnel.')
 
 
 def main():

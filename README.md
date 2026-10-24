@@ -8,7 +8,7 @@ A small hosting panel for your personal tools. A responsive dashboard, live serv
 python3 -m hosty.cli serve
 ```
 
-Open http://127.0.0.1:8787 and enter the token printed in your terminal. Apps are saved in `~/.local/share/hosty/apps.json`. The panel runs development apps locally. Public production deployment requires an Ubuntu installation. Linux supplies system memory and server uptime; on macOS memory is unavailable and uptime measures the panel process. CPU is normalized one-minute load average, not instantaneous CPU utilization.
+First run prompts for a username, password, and panel domain. Press Enter for `hostyuser`, `h0styp4ss`, and `hosty.localhost`. Noninteractive first runs use those defaults. Open http://hosty.localhost:8787 (or http://127.0.0.1:8787) and sign in with your account. Apps are saved in `~/.local/share/hosty/apps.json`. The panel runs development apps locally. Public production deployment requires an Ubuntu installation. Linux supplies system memory and server uptime; on macOS memory is unavailable and uptime measures the panel process. CPU is normalized one-minute load average, not instantaneous CPU utilization.
 
 ## Per-app environments
 
@@ -34,13 +34,13 @@ The bootstrap installs Python if it is missing, then runs `hosty install`. If Py
 
 Alternatively install this package in a virtual environment with `pip install .`, then run `sudo /path/to/venv/bin/hosty install`.
 
-The installer checks installed packages and installs missing dependencies: Python, pip, venv, Uvicorn, Python build tools, Nginx, Certbot with its Nginx plugin, curl, unzip, CA certificates, Git, OpenSSH/SFTP, ACL permission tools, and native build tools. It installs Bun system-wide using its official installer when no usable shared installation exists. Existing usable Bun installations are preserved. It verifies the runtimes and configuration, enables the services and certificate renewal timer, and installs a `hosty` command. Rerunning the installer keeps the existing panel token and app records. It adds `127.0.0.1 hosty.local` to the installed machine’s hosts file and binds the panel to localhost. On that machine, open `http://hosty.local:8787`. A remote VPS cannot configure your laptop’s hosts file; use the SSH tunnel below and `http://localhost:8787` from your laptop. Access it through an SSH tunnel:
+The installer checks installed packages and installs missing dependencies: Python, pip, venv, Uvicorn, Python build tools, Nginx, Certbot with its Nginx plugin, curl, unzip, CA certificates, Git, OpenSSH/SFTP, ACL permission tools, and native build tools. It installs Bun system-wide using its official installer when no usable shared installation exists. Existing usable Bun installations are preserved. It verifies the runtimes and configuration, enables the services and certificate renewal timer, and installs a `hosty` command. Rerunning the installer keeps the existing account and app records. First-time installation prompts for username, password, and panel domain, defaulting to `hostyuser`, `h0styp4ss`, and `hosty.localhost`. It configures Nginx to route that hostname to the panel. The default local hostname is mapped to loopback on the installed machine. On that machine, open `http://hosty.localhost` (port 80) or `http://hosty.localhost:8787` directly. A remote VPS cannot configure your laptop’s hosts file; use the SSH tunnel below and `http://localhost:8787` from your laptop. Access it through an SSH tunnel:
 
 ```sh
 ssh -L 8787:127.0.0.1:8787 your-user@your-server
 ```
 
-Open http://localhost:8787. Read your token with `sudo cat /etc/hosty.env`. Keep the token private: it authorizes deployment operations on your server. The panel service runs as root to configure Nginx, systemd, and certificates; application services run as the unprivileged `hosty` user. Keep the panel on loopback behind the SSH tunnel.
+Open http://localhost:8787 and sign in with your configured username and password. Passwords are salted and hashed in `panel.json`, with file permissions restricted to its owner. Login sessions expire after 12 hours or a panel restart. The old environment token cannot bypass account login. The panel service runs as root to configure Nginx, systemd, and certificates; application services run as the unprivileged `hosty` user. The panel process stays on loopback; Nginx exposes its configured domain on HTTP port 80. For remote access, set a DNS A record to the VPS and configure HTTPS on the Nginx panel site before using it over an untrusted network, or use the SSH tunnel. Change the default password in Settings before public use.
 
 A published curl bootstrap URL is not included; use a clone from your own trusted repository. Installation is intended for a fresh server with no conflicting Nginx configuration.
 
@@ -76,3 +76,7 @@ Click the trash icon, type `DELETE` exactly, then select **Delete application**.
 Use the pencil icon to edit an app’s name, runtime, directory, environment, production domain, development hostname, and app port. Ports may be 1024–65535; leaving the port blank selects one automatically (or keeps the current port when editing). Hosty rejects ports reserved by another app, occupied ports, and the panel’s own port.
 
 Python receives the configured port via Uvicorn’s `--port`; Bun receives `PORT` and `HOST`. If your framework uses a hardcoded port instead, choose that same port in Hosty or update your script to honor `PORT`. Hosty uses this port in its development URL and production Nginx upstream. Saving restarts a running app and preserves stopped apps as stopped. Failed edits attempt to restore the previous service and configuration. Port-only changes preserve an existing HTTPS configuration; changing the production domain or environment requires enabling SSL again.
+
+## Panel account and domain
+
+Open **Settings** to change the panel username, password, or domain. Enter your current password to save; leave the new password blank to keep it. Saving signs out existing sessions and requires a fresh login. A public panel domain needs DNS pointing to this VPS; local aliases refer to the machine where the browser is running. On Ubuntu the Nginx panel route updates automatically. Existing HTTPS configuration is preserved when the domain is unchanged. Changing the hostname creates an HTTP route; configure a certificate for the new hostname separately. Local `serve` mode uses `http://DOMAIN:8787` and does not change system DNS or install Nginx.

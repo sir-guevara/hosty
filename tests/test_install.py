@@ -85,8 +85,8 @@ class PanelAliasTest(unittest.TestCase):
             configure_panel_alias(hosts)
             configure_panel_alias(hosts)
             text = hosts.read_text()
-            self.assertEqual(text.count('hosty.local'), 1)
-            self.assertIn('127.0.0.1 hosty.local', text)
+            self.assertEqual(text.count('hosty.localhost'), 1)
+            self.assertIn('127.0.0.1 hosty.localhost', text)
             self.assertIn('192.0.2.1 example.test', text)
 
     def test_conflicting_alias_is_not_overwritten(self):
@@ -94,7 +94,7 @@ class PanelAliasTest(unittest.TestCase):
         from hosty.cli import configure_panel_alias
         with tempfile.TemporaryDirectory() as directory:
             hosts = Path(directory) / 'hosts'
-            original = '192.0.2.1 hosty.local\n'
+            original = '192.0.2.1 hosty.localhost\n'
             hosts.write_text(original)
             with self.assertRaises(RuntimeError):
                 configure_panel_alias(hosts)

@@ -14,7 +14,9 @@ import sys
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie
 from pathlib import Path
+from .auth import ensure_config, read_config, write_config, verify, account
 from .paths import app_home, expand_app_path
 
 DATA = Path(os.environ.get('HOSTY_DATA', Path.home() / '.local/share/hosty'))
@@ -24,6 +26,8 @@ PROCESSES = {}
 MUTATION_LOCK = threading.Lock()
 START = time.time()
 TOKEN = os.environ.get('HOSTY_TOKEN', '')
+SESSIONS = {}
+LOGIN_ATTEMPTS = {}
 
 
 def command(args, *, cwd=None, env=None, timeout=90):
@@ -411,22 +415,67 @@ def delete_app(items, item):
         raise
 
 
+def configure_panel_domain(domain, port):
+    if not SYSTEM:
+        return
+    path = Path('/etc/nginx/conf.d/hosty-panel.conf')
+    original = path.read_text() if path.exists() else None
+    if original and re.search(r'server_name\s+' + re.escape(domain) + r'\s*;', original) and f'proxy_pass http://127.0.0.1:{port};' in original:
+        return
+    config = f"""server {{
+    listen 80;
+    server_name {domain};
+    location / {{
+        proxy_pass http://127.0.0.1:{port};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+}}
+"""
+    try:
+        path.write_text(config)
+        command(['nginx', '-t'])
+        command(['systemctl', 'reload', 'nginx'])
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        if original is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(original)
+        raise
+
+
 class Handler(BaseHTTPRequestHandler):
-    def reply(self, data, code=200):
+    def reply(self, data, code=200, cookie=None):
         body = json.dumps(data).encode()
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
+        self.send_header('Cache-Control', 'no-store')
+        if cookie:
+            self.send_header('Set-Cookie', cookie)
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def authorized(self):
-        return hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + TOKEN)
+        config = read_config(DATA)
+        if not config:  # Legacy/test configurations only; serve() always creates an account.
+            return bool(TOKEN) and hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + TOKEN)
+        cookies = SimpleCookie()
+        try:
+            cookies.load(self.headers.get('Cookie', ''))
+        except Exception:
+            return False
+        key = cookies.get('hosty_session')
+        session = SESSIONS.get(key.value) if key else None
+        return bool(session and session['expires'] > time.time() and session['revision'] == config['revision'] and session['data'] == str(DATA))
 
     def do_GET(self):
         if self.path.startswith('/api/'):
             if not self.authorized():
                 return self.reply({'error': 'Enter your panel token to connect.'}, 401)
+            if self.path == '/api/settings':
+                config = read_config(DATA)
+                return self.reply({'username': config['username'], 'domain': config['domain'], 'panel_port': self.server.server_port, 'system': SYSTEM})
             if self.path == '/api/overview':
                 return self.reply({'server': metrics(), 'apps': [status(a) for a in apps()]})
             return self.reply({'error': 'Not found'}, 404)
@@ -446,14 +495,52 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_post()
 
     def handle_post(self):
-        if not self.authorized():
-            return self.reply({'error': 'Unauthorized'}, 401)
         try:
             length = int(self.headers.get('Content-Length', 0))
             if length > 16384:
                 raise ValueError('Request too large')
             data = json.loads(self.rfile.read(length) or '{}')
+            config = read_config(DATA)
+            if config and self.headers.get('X-Hosty-Request') != '1':
+                return self.reply({'error': 'Invalid panel request'}, 403)
+            if self.path == '/api/login':
+                if not config:
+                    return self.reply({'error': 'Panel account has not been configured'}, 400)
+                ip = self.client_address[0]
+                attempts = [stamp for stamp in LOGIN_ATTEMPTS.get(ip, []) if stamp > time.time() - 60]
+                LOGIN_ATTEMPTS[ip] = attempts
+                if len(attempts) >= 10:
+                    return self.reply({'error': 'Too many attempts. Try again in a minute.'}, 429)
+                attempts.append(time.time())
+                if not hmac.compare_digest(str(data.get('username', '')).encode(), config['username'].encode()) or not verify(config, str(data.get('password', ''))):
+                    return self.reply({'error': 'Incorrect username or password.'}, 401)
+                key = secrets.token_urlsafe(32)
+                for old in list(SESSIONS):
+                    if SESSIONS[old]['expires'] <= time.time():
+                        SESSIONS.pop(old)
+                SESSIONS[key] = {'expires': time.time() + 43200, 'revision': config['revision'], 'data': str(DATA)}
+                secure = '; Secure' if self.headers.get('X-Forwarded-Proto') == 'https' else ''
+                return self.reply({'username': config['username']}, cookie=f'hosty_session={key}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{secure}')
+            if not self.authorized():
+                return self.reply({'error': 'Sign in to continue.'}, 401)
+            if self.path == '/api/logout':
+                cookies = SimpleCookie(self.headers.get('Cookie', ''))
+                if cookies.get('hosty_session'):
+                    SESSIONS.pop(cookies['hosty_session'].value, None)
+                return self.reply({'ok': True}, cookie='hosty_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
             items = apps()
+            if self.path == '/api/settings':
+                if not config or not verify(config, str(data.get('current_password', ''))):
+                    raise ValueError('Enter your current password to change settings.')
+                username = str(data.get('username', config['username'])).strip()
+                domain = str(data.get('domain', config['domain'])).strip().lower()
+                password = str(data.get('password', ''))
+                updated = account(username, password or str(data['current_password']), domain)
+                if any(app.get('domain') == domain for app in items):
+                    raise ValueError('That domain is already assigned to an app.')
+                configure_panel_domain(domain, self.server.server_port)
+                write_config(DATA, updated)
+                return self.reply({'ok': True, 'domain': domain, 'reauthenticate': True}, cookie='hosty_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
             edit_match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/edit', self.path)
             existing = None
             if edit_match:
@@ -491,6 +578,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError(f'Hosty cannot access {path}. Give the user running Hosty permission to traverse this directory and its parent directories.')
                 if not stat.S_ISDIR(directory_mode):
                     raise ValueError(f'App path is a file, not a directory: {path}. Select the folder containing your app.')
+                if config and domain == config['domain']:
+                    raise ValueError('That domain is reserved for the Hosty panel.')
                 if domain and any(a['domain'] == domain and (not existing or a['id'] != existing['id']) for a in items):
                     raise ValueError('This domain is already assigned to an app.')
                 item = {'id': secrets.token_hex(6), 'name': name, 'domain': domain, 'dev_domain': dev_domain, 'path': path, 'runtime': runtime, 'port': select_app_port(data.get('port'), items, existing, self.server.server_port), 'created': time.time(), 'ssl': False, 'environment': mode}
@@ -537,6 +626,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Choose Development or Production.')
                 domain = str(data.get('domain', item.get('domain', ''))).strip().lower()
                 if mode == 'production':
+                    if config and domain == config['domain']:
+                        raise ValueError('That domain is reserved for the Hosty panel.')
                     if not SYSTEM:
                         raise ValueError('Production requires an Ubuntu installation.')
                     if len(domain) > 253 or '.' not in domain or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in domain.split('.')):
@@ -614,13 +705,8 @@ def serve(host, port, dev=False):
         raise SystemExit('Dev mode is for local use. Unset HOSTY_SYSTEM before running --dev.')
     DEV = dev
     DATA.mkdir(parents=True, exist_ok=True)
-    if not TOKEN:
-        token_file = DATA / 'token'
-        if not token_file.exists():
-            token_file.write_text(secrets.token_urlsafe(32))
-            token_file.chmod(0o600)
-        TOKEN = token_file.read_text().strip()
-    print(f'Hosty is ready at http://{host}:{port}\nPanel token: {TOKEN}', flush=True)
+    config = ensure_config(DATA)
+    print(f'Hosty is ready at http://{config["domain"]}:{port} (http://{host}:{port})', flush=True)
     http = ThreadingHTTPServer((host, port), Handler)
     if not SYSTEM:
         for item in apps():

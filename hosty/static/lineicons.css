@@ -90,3 +90,7 @@
 .lni-trash-3::before {
   content: "\ec17";
 }
+
+.lni-gear-1::before {
+  content: "\eaf5";
+}

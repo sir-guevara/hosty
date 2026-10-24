@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-let token = sessionStorage.getItem('hosty-token') || '', state = {apps: [], server: {}}, page = 'overview';
+let state = {apps: [], server: {}}, page = 'overview';
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icon = name => `<i class="lni lni-${name}" aria-hidden="true"></i>`;
 const runtimeIcon = runtime => icon({html: 'code-1', python: 'python', bun: 'javascript'}[runtime]);
@@ -7,7 +7,7 @@ const gb = value => (value / 1073741824).toFixed(1);
 let toastTimer;
 function toast(message) { $('toast').textContent = message; $('toast').style.display = 'block'; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').style.display = 'none', 4500); }
 async function api(path, body) {
-  const response = await fetch('/api/' + path, {method: body === undefined ? 'GET' : 'POST', headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
+  const response = await fetch('/api/' + path, {method: body === undefined ? 'GET' : 'POST', headers: {'X-Hosty-Request': '1', 'Content-Type': 'application/json'}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
   const data = await response.json();
   if (!response.ok) { if (response.status === 401 && !$('auth-dialog').open) $('auth-dialog').showModal(); throw new Error(data.error || 'Could not connect to server'); }
   return data;
@@ -64,20 +64,22 @@ function renderApps() {
 }
 function navigate(next) {
   page = next;
-  const titles = {overview: ['Make yourself at host.', 'A little space on the internet. Everything running smoothly.'],apps: ['Your corner of the internet.', 'Bring your projects together. Give every idea a home.'], certs: ['A little peace of mind.', 'Free SSL certificates for every application you host.'], server: ['Meet your server.', 'The machine that keeps your ideas online.']};
+  const titles = {overview: ['Make yourself at host.', 'A little space on the internet. Everything running smoothly.'],apps: ['Your corner of the internet.', 'Bring your projects together. Give every idea a home.'], certs: ['A little peace of mind.', 'Free SSL certificates for every application you host.'], server: ['Meet your server.', 'The machine that keeps your ideas online.'], settings: ['Make Hosty yours.', 'Manage your panel account and browser address.']};
   $('page-title').textContent = titles[page][0];
   $('page-description').textContent = titles[page][1];
-  $('breadcrumb').textContent = {overview:'Overview',apps:'Applications',certs:'SSL certificates',server:'Server details'}[page];
+  $('breadcrumb').textContent = {overview:'Overview',apps:'Applications',certs:'SSL certificates',server:'Server details',settings:'Settings'}[page];
   $('overview-page').hidden = page !== 'overview';
   $('applications-section').hidden = !['overview','apps'].includes(page);
   $('bottom-panels').hidden = page !== 'overview';
   $('certificates-page').hidden = page !== 'certs';
   $('server-page').hidden = page !== 'server';
+  $('settings-page').hidden = page !== 'settings';
+  if (page === 'settings') loadSettings().catch(error => toast(error.message));
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('selected', b.dataset.page === page));
 }
 function updateFormEnvironment() {
   const production = $('app-environment').value === 'production';
-  document.querySelector('input[name="domain"]').required = production;
+  $('app-form').querySelector('input[name="domain"]').required = production;
   $('domain-help').textContent = production ? 'Required. Point your DNS A record to this server.' : 'Optional production domain. Development uses its own local address.';
 }
 let editingAppId = null;
@@ -95,12 +97,18 @@ $('app-form').onsubmit = async e => {
   finally { $('create-button').disabled = false; }
 };
 $('auth-form').onsubmit = async e => {
-  e.preventDefault(); token = $('token-input').value.trim();
-  try { await refresh(); sessionStorage.setItem('hosty-token', token); $('auth-dialog').close(); $('auth-error').textContent = ''; }
-  catch(error) { $('auth-error').textContent = error.message; }
+  e.preventDefault(); $('login-submit').disabled = true;
+  try {
+    await api('login', {username: $('login-username').value.trim(), password: $('login-password').value});
+    $('login-password').value = '';
+    await refresh();
+    $('auth-dialog').close();
+    $('auth-error').textContent = '';
+  } catch (error) { $('auth-error').textContent = error.message; }
+  finally { $('login-submit').disabled = false; }
 };
 $('auth-dialog').addEventListener('cancel', e => e.preventDefault());
-$('disconnect').onclick = () => { sessionStorage.removeItem('hosty-token'); token = ''; location.reload(); };
+$('disconnect').onclick = async () => { try { await api('logout', {}); location.reload(); } catch (error) { toast(error.message); } };
 function info(title, text) { $('info-title').textContent = title; $('info-content').textContent = text; $('info-dialog').showModal(); }
 $('info-close').onclick = () => $('info-dialog').close();
 $('access-details').onclick = () => info('SSH & SFTP access', 'Connect using an existing SSH user and key on your VPS.\n\n' + $('ssh-command').textContent + '\n\nFor file transfers, use port 22 in your SFTP client with the same account.\n\nHosty does not store SSH passwords or toggle SSH access. Manage access with sshd and your server firewall.');
@@ -124,8 +132,8 @@ document.addEventListener('click', async e => {
   catch(error) { if (error.message.includes('\n')) info('Application could not start', error.message); else toast(error.message); }
   finally { button.disabled = false; }
 });
-if (token) refresh().catch(() => {}); else $('auth-dialog').showModal();
-setInterval(() => { if (token && !$('auth-dialog').open) refresh().catch(() => {}); }, 15000);
+refresh().catch(() => {});
+setInterval(() => { if (!$('auth-dialog').open) refresh().catch(() => {}); }, 15000);
 
 document.addEventListener('change', async e => {
   const select = e.target.closest('[data-environment]');
@@ -210,3 +218,21 @@ document.addEventListener('click', e => {
   }
   $('app-form').onchange();
 });
+
+async function loadSettings() {
+  const settings = await api('settings');
+  $('settings-username').value = settings.username;
+  $('settings-domain').value = settings.domain;
+  $('settings-address').textContent = settings.system ? `Panel address: http://${settings.domain}. Configure DNS for access from other machines.` : `Panel address: http://${settings.domain}:${settings.panel_port}. This hostname must resolve to the machine running Hosty.`;
+}
+$('settings-form').onsubmit = async e => {
+  e.preventDefault(); $('settings-submit').disabled = true; $('settings-error').textContent = '';
+  try {
+    await api('settings', {username: $('settings-username').value.trim(), domain: $('settings-domain').value.trim(), password: $('settings-password').value, current_password: $('settings-current-password').value});
+    $('settings-password').value = ''; $('settings-current-password').value = '';
+    $('login-username').value = $('settings-username').value;
+    $('auth-dialog').showModal();
+    toast('Settings saved. Sign in again with your account.');
+  } catch (error) { $('settings-error').textContent = error.message; }
+  finally { $('settings-submit').disabled = false; }
+};
