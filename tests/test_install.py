@@ -241,3 +241,50 @@ class AppPortTest(unittest.TestCase):
             self.assertIn('listen 443 ssl', nginx.read_text())
             self.assertIn('proxy_pass http://127.0.0.1:3000;', nginx.read_text())
             self.assertIn('ssl_certificate /etc/cert.pem', nginx.read_text())
+
+class GoRuntimeTest(unittest.TestCase):
+    @patch('hosty.server.shutil.which', return_value='/usr/bin/go')
+    @patch('hosty.server.command')
+    def test_module_download_and_build_as_app_user(self, command, which):
+        import tempfile
+        import os
+        from hosty.server import build_go_app
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / 'go.mod').write_text('module example.com/tool\n\ngo 1.22\n')
+            with patch('hosty.server.SYSTEM', True), patch.dict(os.environ, {'HOSTY_TOKEN': 'secret'}):
+                binary = build_go_app({'path': temporary, 'go_entry': './cmd/server'})
+            self.assertEqual(binary, str(Path(temporary) / '.hosty/app'))
+            self.assertEqual(command.call_args_list[1].args[0], ['runuser', '-u', 'hosty', '--', '/usr/bin/go', 'mod', 'download'])
+            self.assertEqual(command.call_args_list[2].args[0], ['runuser', '-u', 'hosty', '--', '/usr/bin/go', 'build', '-o', binary, './cmd/server'])
+            self.assertNotIn('HOSTY_TOKEN', command.call_args.kwargs['env'])
+            self.assertEqual(command.call_args.kwargs['cwd'], temporary)
+
+    @patch('hosty.server.shutil.which', return_value='/usr/bin/go')
+    def test_go_module_required(self, which):
+        import tempfile
+        from hosty.server import build_go_app
+        with tempfile.TemporaryDirectory() as temporary, self.assertRaisesRegex(ValueError, 'go.mod'):
+            build_go_app({'path': temporary})
+
+    @patch('hosty.server.shutil.which', return_value='/usr/bin/go')
+    @patch('hosty.server.command', side_effect=ValueError('compile error'))
+    def test_go_build_failure_is_actionable(self, command, which):
+        import tempfile
+        from hosty.server import build_go_app
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / 'go.mod').write_text('module example.com/tool\n')
+            with self.assertRaisesRegex(ValueError, 'compile error'):
+                build_go_app({'path': temporary})
+
+    @patch('hosty.server.build_go_app', return_value='/var/www/tool/.hosty/app')
+    @patch('hosty.server.command')
+    @patch.object(Path, 'write_text')
+    def test_go_service_runs_binary_with_configured_port(self, write, command, build):
+        from hosty.server import configure_app_service
+        item = {'id': 'abcdef123456', 'runtime': 'go', 'path': '/var/www/tool', 'port': 8080, 'environment': 'production'}
+        with patch('hosty.server.SYSTEM', False):
+            configure_app_service(item)
+        unit = write.call_args.args[0]
+        self.assertIn('ExecStart=/var/www/tool/.hosty/app', unit)
+        self.assertIn('Environment=PORT=8080', unit)
+        self.assertIn('Environment=HOST=127.0.0.1', unit)

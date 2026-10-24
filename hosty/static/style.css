@@ -425,3 +425,6 @@ form > label > select { display: block; width: 100%; margin: 8px 0; padding: 11p
 #delete-app-name { color: #193622; overflow-wrap: anywhere; }
 .app-port { color: #385531; background: #edf5e5; padding: 2px 5px; border: 1px solid #c6d7bf; border-radius: 3px; font-size: 11px; }
 #settings-form { max-width: 620px; }
+.runtime-options { grid-template-columns: repeat(2, 1fr); }
+.runtime-icon.go { color: #246a80; background: #e3f3f7; border-color: #b3d5df; }
+@media (max-width: 520px) { .runtime-options { grid-template-columns: 1fr; } }

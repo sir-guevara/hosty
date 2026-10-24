@@ -110,7 +110,7 @@ def save(items):
 
 def version(executable):
     try:
-        return command([executable, '--version']).replace('Python ', '')
+        return command([executable, 'version' if executable == 'go' else '--version']).replace('Python ', '')
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return 'Not installed'
 
@@ -126,7 +126,7 @@ def metrics():
         ip = socket.gethostbyname(socket.gethostname())
     except OSError:
         ip = '127.0.0.1'
-    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'app_home': app_home(), 'firewall': 'Unverified', 'ssh': 'Managed on server'}
+    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'go': version('go'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'app_home': app_home(), 'firewall': 'Unverified', 'ssh': 'Managed on server'}
 
 
 def development_domain(item):
@@ -208,6 +208,33 @@ def install_bun_dependencies(item, bun):
         raise ValueError(f'Dependency installation failed in {item["path"]}:\n{error}') from error
 
 
+def build_go_app(item):
+    go = shutil.which('go')
+    if not go:
+        raise ValueError('Go is not installed. Rerun sudo sh install.sh on Ubuntu, or install Go locally.')
+    project = Path(item['path'])
+    if not (project / 'go.mod').is_file():
+        raise ValueError('Select a Go module directory containing go.mod.')
+    entry = item.get('go_entry', '.')
+    if entry != '.' and (not re.fullmatch(r'\./[A-Za-z0-9_./-]+', entry) or '..' in entry.split('/')):
+        raise ValueError('Go package must be . or a project package such as ./cmd/server.')
+    build = project / '.hosty'
+    if build.is_symlink():
+        raise ValueError('The .hosty build directory cannot be a symlink.')
+    binary = build / 'app'
+    build_env = {key: value for key, value in os.environ.items()
+                 if key in ('PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL')}
+    build_env.update({'GOCACHE': str(build / 'go-cache'), 'GOMODCACHE': str(build / 'go-modules')})
+    prefix = ['runuser', '-u', 'hosty', '--'] if SYSTEM else []
+    try:
+        command([*prefix, 'mkdir', '-p', '--', str(build)], cwd=str(project), env=build_env)
+        command([*prefix, go, 'mod', 'download'], cwd=str(project), env=build_env, timeout=300)
+        command([*prefix, go, 'build', '-o', str(binary), entry], cwd=str(project), env=build_env, timeout=300)
+    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+        raise ValueError(f'Go dependency installation or build failed in {project}:\n{error}') from error
+    return str(binary)
+
+
 def start_local(item):
     process = PROCESSES.get(item['id'])
     if process and process.poll() is None:
@@ -226,6 +253,8 @@ def start_local(item):
         if not python.is_file():
             raise ValueError('Create a .venv in the app directory and install uvicorn and your dependencies first.')
         args = [str(python), '-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', str(port)]
+    elif item['runtime'] == 'go':
+        args = [build_go_app(item)]
     else:
         bun = shutil.which('bun')
         if not bun:
@@ -264,6 +293,8 @@ def configure_app_service(item):
         if not Path(python).is_file():
             python = '/usr/bin/python3'
         executable = f'{python} -m uvicorn main:app --host 127.0.0.1 --port {port}'
+    elif runtime == 'go':
+        executable = build_go_app(item)
     else:
         bun = shutil.which('bun')
         if not bun:
@@ -555,6 +586,9 @@ class Handler(BaseHTTPRequestHandler):
                 path = str(data.get('path', '')).strip()
                 path = expand_app_path(path)
                 runtime = data.get('runtime')
+                go_entry = str(data.get('go_entry', '.')).strip() or '.'
+                if go_entry != '.' and (not re.fullmatch(r'\./[A-Za-z0-9_./-]+', go_entry) or '..' in go_entry.split('/')):
+                    raise ValueError('Go package must be . or a project package such as ./cmd/server.')
                 mode = data.get('environment', 'production' if SYSTEM and not DEV else 'development')
                 if mode not in ('development', 'production'):
                     raise ValueError('Choose Development or Production.')
@@ -566,7 +600,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Enter a valid domain, such as app.example.com.')
                 if dev_domain and not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.localhost', dev_domain):
                     raise ValueError('Use a development hostname such as my-app.localhost, or leave it blank for an automatic address.')
-                if runtime not in ('python', 'bun', 'html'):
+                if runtime not in ('python', 'bun', 'html', 'go'):
                     raise ValueError('Choose a supported runtime.')
                 if not re.fullmatch(r'/[A-Za-z0-9_./-]+', path) or '..' in path.split('/'):
                     raise ValueError(f'Invalid directory path: {path!r}. Use an absolute path or ~/ with letters, numbers, /, _, - or dots.')
@@ -582,7 +616,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('That domain is reserved for the Hosty panel.')
                 if domain and any(a['domain'] == domain and (not existing or a['id'] != existing['id']) for a in items):
                     raise ValueError('This domain is already assigned to an app.')
-                item = {'id': secrets.token_hex(6), 'name': name, 'domain': domain, 'dev_domain': dev_domain, 'path': path, 'runtime': runtime, 'port': select_app_port(data.get('port'), items, existing, self.server.server_port), 'created': time.time(), 'ssl': False, 'environment': mode}
+                item = {'id': secrets.token_hex(6), 'name': name, 'domain': domain, 'dev_domain': dev_domain, 'path': path, 'runtime': runtime, 'go_entry': go_entry, 'port': select_app_port(data.get('port'), items, existing, self.server.server_port), 'created': time.time(), 'ssl': False, 'environment': mode}
                 if existing:
                     candidate = {**existing, **item, 'id': existing['id'], 'created': existing.get('created', item['created'])}
                     candidate['ssl'] = existing.get('ssl', False) and domain == existing['domain'] and mode == environment(existing)

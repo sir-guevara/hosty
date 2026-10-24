@@ -1,6 +1,6 @@
 # Hosty
 
-A small hosting panel for your personal tools. A responsive dashboard, live server metrics, Python / Bun / static apps, systemd service controls, Nginx routing, logs, and Let's Encrypt certificates. No Python dependencies are required to run the panel.
+A small hosting panel for your personal tools. A responsive dashboard, live server metrics, Python / Go / Bun / static apps, systemd service controls, Nginx routing, logs, and Let's Encrypt certificates. No Python dependencies are required to run the panel.
 
 ## Try locally
 
@@ -34,7 +34,7 @@ The bootstrap installs Python if it is missing, then runs `hosty install`. If Py
 
 Alternatively install this package in a virtual environment with `pip install .`, then run `sudo /path/to/venv/bin/hosty install`.
 
-The installer checks installed packages and installs missing dependencies: Python, pip, venv, Uvicorn, Python build tools, Nginx, Certbot with its Nginx plugin, curl, unzip, CA certificates, Git, OpenSSH/SFTP, ACL permission tools, and native build tools. It installs Bun system-wide using its official installer when no usable shared installation exists. Existing usable Bun installations are preserved. It verifies the runtimes and configuration, enables the services and certificate renewal timer, and installs a `hosty` command. Rerunning the installer keeps the existing account and app records. First-time installation prompts for username, password, and panel domain, defaulting to `hostyuser`, `h0styp4ss`, and `hosty.localhost`. It configures Nginx to route that hostname to the panel. The default local hostname is mapped to loopback on the installed machine. On that machine, open `http://hosty.localhost` (port 80) or `http://hosty.localhost:8787` directly. A remote VPS cannot configure your laptop’s hosts file; use the SSH tunnel below and `http://localhost:8787` from your laptop. Access it through an SSH tunnel:
+The installer checks installed packages and installs missing dependencies: Python, pip, venv, Uvicorn, Python build tools, Go, Nginx, Certbot with its Nginx plugin, curl, unzip, CA certificates, Git, OpenSSH/SFTP, ACL permission tools, and native build tools. It installs Bun system-wide using its official installer when no usable shared installation exists. Existing usable Bun installations are preserved. It verifies the runtimes and configuration, enables the services and certificate renewal timer, and installs a `hosty` command. Rerunning the installer keeps the existing account and app records. First-time installation prompts for username, password, and panel domain, defaulting to `hostyuser`, `h0styp4ss`, and `hosty.localhost`. It configures Nginx to route that hostname to the panel. The default local hostname is mapped to loopback on the installed machine. On that machine, open `http://hosty.localhost` (port 80) or `http://hosty.localhost:8787` directly. A remote VPS cannot configure your laptop’s hosts file; use the SSH tunnel below and `http://localhost:8787` from your laptop. Access it through an SSH tunnel:
 
 ```sh
 ssh -L 8787:127.0.0.1:8787 your-user@your-server
@@ -80,3 +80,9 @@ Python receives the configured port via Uvicorn’s `--port`; Bun receives `PORT
 ## Panel account and domain
 
 Open **Settings** to change the panel username, password, or domain. Enter your current password to save; leave the new password blank to keep it. Saving signs out existing sessions and requires a fresh login. A public panel domain needs DNS pointing to this VPS; local aliases refer to the machine where the browser is running. On Ubuntu the Nginx panel route updates automatically. Existing HTTPS configuration is preserved when the domain is unchanged. Changing the hostname creates an HTTP route; configure a certificate for the new hostname separately. Local `serve` mode uses `http://DOMAIN:8787` and does not change system DNS or install Nginx.
+
+## Go apps
+
+Select **Go**, a module directory containing `go.mod`, and the port your server uses. Set **Go package** to `.` for a root main package or, for example, `./cmd/server`. Hosty downloads modules, builds `.hosty/app`, and runs that binary in both Development and Production. Add `.hosty/` to your project’s `.gitignore`.
+
+The Ubuntu installer supplies Go automatically (`golang-go`); local development needs a Go toolchain installed. Your server must read `HOST` and `PORT` to listen on the configured loopback address, or use a fixed port matching the app’s setting. Start/restart rebuilds the app; automatic source watching is not implemented. The toolchain may download a newer version when required by your module, so initial builds need network access. Go build commands run as `hosty` on installed servers and as your current user locally, with dependency and build caches inside `.hosty`.

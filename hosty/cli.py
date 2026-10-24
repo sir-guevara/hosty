@@ -13,7 +13,7 @@ from .auth import ensure_config
 PACKAGES = (
     'python3', 'python3-venv', 'python3-pip', 'python3-uvicorn', 'python3-dev',
     'nginx', 'certbot', 'python3-certbot-nginx', 'curl', 'unzip',
-    'ca-certificates', 'git', 'openssh-server', 'build-essential', 'pkg-config', 'acl',
+    'ca-certificates', 'git', 'openssh-server', 'build-essential', 'pkg-config', 'acl', 'golang-go',
 )
 SYSTEM_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
@@ -100,6 +100,7 @@ def install():
         subprocess.run(['useradd', '--system', '--create-home', '--home-dir', '/var/lib/hosty', '--shell', '/usr/sbin/nologin', 'hosty'], check=True)
     bun = install_bun()
     subprocess.run(['/usr/bin/python3', '-c', 'import venv, pip, uvicorn'], check=True)
+    subprocess.run(['go', 'version'], check=True)
     subprocess.run(['certbot', 'plugins', '--init'], check=True)
     subprocess.run(['nginx', '-t'], check=True)
     data = Path('/var/lib/hosty')

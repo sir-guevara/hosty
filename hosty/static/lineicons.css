@@ -94,3 +94,7 @@
 .lni-gear-1::before {
   content: "\eaf5";
 }
+
+.lni-go::before {
+  content: "\eafd";
+}
