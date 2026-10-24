@@ -341,6 +341,16 @@ WantedBy=multi-user.target
     Path(f'/etc/systemd/system/hosty-app-{ident}.service').write_text(unit)
 
 
+def add_ipv6_listeners(config):
+    # Ubuntu's default site listens on IPv6 too. Cover both address families.
+    def expand(match):
+        indent, port, options = match.groups()
+        if re.search(r'listen\s+\[::\]:' + port + r'\b', config):
+            return match.group(0)
+        return match.group(0) + f'\n{indent}listen [::]:{port}{options};'
+    return re.sub(r'(?m)^([ \t]*)listen[ \t]+(80|443)([^;\n]*);', expand, config)
+
+
 def write_app_route(item):
     ident = item['id']
     port = item['port']
@@ -363,6 +373,7 @@ def write_app_route(item):
             config = re.sub(r'proxy_pass http://127\.0\.0\.1:[0-9]+;', f'proxy_pass http://127.0.0.1:{port};', nginx_path.read_text())
         if 'add_header X-Hosty-App ' not in config:
             config = re.sub(r'\bserver\s*\{', lambda match: match.group(0) + f'\n    add_header X-Hosty-App {ident} always;', config)
+        config = add_ipv6_listeners(config)
         nginx_path.write_text(config)
     else:
         nginx_path.unlink(missing_ok=True)
@@ -403,6 +414,34 @@ def routing_status(item):
         return {'state': 'error', 'message': 'Nginx is not responding on this server. Repair routing in Hosty.'}
     finally:
         connection.close()
+
+
+def routing_details(item):
+    details = {'domain': item['domain'], 'environment': environment(item), 'upstream': f'127.0.0.1:{item["port"]}', 'expected_config': f'/etc/nginx/conf.d/hosty-{item["id"]}.conf', 'routing': routing_status(item)}
+    try:
+        details['dns_addresses'] = sorted({address[4][0] for address in socket.getaddrinfo(item['domain'], 80, type=socket.SOCK_STREAM)})
+    except OSError as error:
+        details['dns_error'] = str(error)
+    if SYSTEM:
+        result = subprocess.run(['nginx', '-T'], capture_output=True, text=True, timeout=10)
+        details['nginx_valid'] = result.returncode == 0
+        details['nginx_messages'] = result.stderr.strip()
+        sections = re.split(r'# configuration file ([^:\n]+):\n', result.stdout)
+        matching = []
+        loaded = []
+        for index in range(1, len(sections) - 1, 2):
+            filename, content = sections[index], sections[index + 1]
+            loaded.append(filename)
+            names = re.findall(r'\bserver_name\s+([^;]+);', content)
+            if any(item['domain'] in nameset.split() for nameset in names):
+                matching.append(filename)
+        details['route_loaded'] = details['expected_config'] in loaded
+        details['matching_sites'] = matching
+        if not details['route_loaded']:
+            details['explanation'] = 'Nginx has not loaded the Hosty app configuration. Its http configuration must include /etc/nginx/conf.d/*.conf.'
+        elif len(matching) > 1:
+            details['explanation'] = 'Multiple loaded Nginx configurations claim this domain. A conflicting site may be serving the welcome page.'
+    return details
 
 
 def select_app_port(raw, items, current=None, panel_port=8787):
@@ -504,8 +543,13 @@ def configure_panel_domain(domain, port):
     path = Path('/etc/nginx/conf.d/hosty-panel.conf')
     original = path.read_text() if path.exists() else None
     if original and re.search(r'server_name\s+' + re.escape(domain) + r'\s*;', original) and f'proxy_pass http://127.0.0.1:{port};' in original:
-        return
-    config = f"""server {{
+        updated = add_ipv6_listeners(original)
+        if updated == original:
+            return
+        config = updated
+    else:
+        config = None
+    config = config or f"""server {{
     listen 80;
     server_name {domain};
     location / {{
@@ -516,7 +560,7 @@ def configure_panel_domain(domain, port):
 }}
 """
     try:
-        path.write_text(config)
+        path.write_text(add_ipv6_listeners(config))
         command(['nginx', '-t'])
         command(['systemctl', 'reload', 'nginx'])
     except (ValueError, OSError, subprocess.TimeoutExpired):
@@ -694,13 +738,15 @@ class Handler(BaseHTTPRequestHandler):
                         result['warning'] = str(error)
                         return self.reply(result, 201)
                 return self.reply(status(item), 201)
-            match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/(start|stop|restart|ssl|logs|environment|delete|repair)', self.path)
+            match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/(start|stop|restart|ssl|logs|environment|delete|repair|routing)', self.path)
             if not match:
                 return self.reply({'error': 'Not found'}, 404)
             ident, action = match.groups()
             item = next((a for a in items if a['id'] == ident), None)
             if not item:
                 return self.reply({'error': 'App not found'}, 404)
+            if action == 'routing':
+                return self.reply(routing_details(item))
             if action == 'repair':
                 if not SYSTEM or environment(item) != 'production':
                     raise ValueError('Routing repair is for Production apps on installed servers.')

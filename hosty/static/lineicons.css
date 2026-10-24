@@ -98,3 +98,7 @@
 .lni-go::before {
   content: "\eafd";
 }
+
+.lni-clipboard::before {
+  content: "\ea87";
+}
