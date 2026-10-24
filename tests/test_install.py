@@ -175,3 +175,47 @@ class AutomaticPermissionsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'sudo sh install.sh'):
                 prepare_app_permissions({'path': str(project)})
         command.assert_not_called()
+
+class BunEnvironmentTest(unittest.TestCase):
+    def test_bun_service_uses_script_for_app_environment(self):
+        import tempfile
+        import json
+        from hosty.server import configure_app_service
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / 'package.json').write_text(json.dumps({'scripts': {'dev': 'vite', 'start': 'bun server.ts'}}))
+            for environment, script in [('development', 'dev'), ('production', 'start')]:
+                item = {'id': 'abcdef123456', 'name': 'Tool', 'runtime': 'bun', 'path': temporary, 'port': 9000, 'environment': environment}
+                with self.subTest(environment=environment), patch('hosty.server.shutil.which', return_value='/usr/local/bin/bun'), patch('hosty.server.command'), patch.object(Path, 'write_text') as write:
+                    configure_app_service(item)
+                    self.assertIn(f'ExecStart=/usr/local/bin/bun run {script}', write.call_args.args[0])
+                    self.assertIn(f'NODE_ENV={environment}', write.call_args.args[0])
+
+    def test_missing_script_reports_correct_environment(self):
+        import tempfile
+        import json
+        from hosty.server import bun_script
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / 'package.json').write_text(json.dumps({'scripts': {'dev': 'vite'}}))
+            self.assertEqual(bun_script({'path': temporary, 'environment': 'development'}), 'dev')
+            with self.assertRaisesRegex(ValueError, 'bun run start'):
+                bun_script({'path': temporary, 'environment': 'production'})
+
+class BunDependencyInstallTest(unittest.TestCase):
+    @patch('hosty.server.command')
+    def test_installed_app_installs_as_app_user_without_panel_secrets(self, command):
+        import os
+        from hosty.server import install_bun_dependencies
+        with patch('hosty.server.SYSTEM', True), patch.dict(os.environ, {'HOSTY_TOKEN': 'private', 'NODE_ENV': 'production'}):
+            install_bun_dependencies({'path': '/var/www/project'}, '/usr/local/bin/bun')
+        args = command.call_args.args[0]
+        self.assertEqual(args, ['runuser', '-u', 'hosty', '--', '/usr/local/bin/bun', 'install'])
+        self.assertEqual(command.call_args.kwargs['cwd'], '/var/www/project')
+        self.assertNotIn('HOSTY_TOKEN', command.call_args.kwargs['env'])
+        self.assertEqual(command.call_args.kwargs['env']['NODE_ENV'], 'development')
+
+    @patch('hosty.server.command', side_effect=ValueError('Package download failed'))
+    def test_failed_install_reports_cause(self, command):
+        from hosty.server import install_bun_dependencies
+        with patch('hosty.server.SYSTEM', False), self.assertRaisesRegex(ValueError, 'Package download failed'):
+            install_bun_dependencies({'path': '/tmp/project'}, '/usr/local/bin/bun')
+        self.assertEqual(command.call_args.args[0], ['/usr/local/bin/bun', 'install'])

@@ -54,12 +54,12 @@ A published curl bootstrap URL is not included; use a clone from your own truste
 Runtime conventions:
 
 - **Python:** expose an ASGI `app` in `main.py`. On installed servers, Hosty provides Python and Uvicorn automatically. If your project has `.venv`, Hosty uses that environment instead; install project dependencies including `uvicorn` there. Dev mode requires this project `.venv`.
-- **Bun:** the Ubuntu installer supplies Bun automatically (install it yourself for local dev mode). Provide a `start` script in `package.json`. The application must honor `HOST=127.0.0.1` and the assigned `PORT`.
+- **Bun:** the Ubuntu installer supplies Bun automatically (install it yourself for local dev mode). Provide a `dev` script for Development and a `start` script for Production in `package.json`. Hosty checks the script exists, automatically runs `bun install` in the project directory on add/start/restart, then runs `bun run dev` or `bun run start` according to the app’s environment. Installed servers install project packages as the `hosty` user. Install failures stop startup and show the underlying error. The application must honor `HOST=127.0.0.1` and the assigned `PORT`.
 - **HTML:** place `index.html` and assets in the directory. The initial implementation serves these using Python's basic HTTP server behind Nginx; use this for small personal sites.
 
 Hosty allocates ports starting at 9000, writes a systemd unit per app, and configures Nginx on port 80. Ensure ports 80 and 443 are reachable. After DNS resolves, select **Enable HTTPS** and supply your email to accept Let's Encrypt's terms. Certbot handles certificate renewal through its Ubuntu timer. The SSL badge records successful issuance; it does not monitor certificate expiration.
 
-To update a project, upload or pull your new code, install changed dependencies, then restart it in Hosty. Hosty installs its own runtime dependencies; project-specific packages in `requirements.txt` or `package.json` still need to be installed in each project. Automatic Git pulling, project dependency installation, custom startup commands and SSH/firewall toggles are not implemented. SSH/SFTP access remains managed by your existing operating system account and keys.
+To update a project, upload or pull your new code, install changed dependencies, then restart it in Hosty. Hosty installs its own runtime dependencies; Bun project packages are installed automatically; Python packages in `requirements.txt` still need to be installed in the project environment. Automatic Git pulling, Python project dependency installation, custom startup commands and SSH/firewall toggles are not implemented. SSH/SFTP access remains managed by your existing operating system account and keys.
 
 ## Checks
 

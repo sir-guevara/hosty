@@ -26,8 +26,8 @@ START = time.time()
 TOKEN = os.environ.get('HOSTY_TOKEN', '')
 
 
-def command(args):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=90)
+def command(args, *, cwd=None, env=None, timeout=90):
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)
     if result.returncode:
         raise ValueError(result.stderr.strip() or result.stdout.strip() or 'Command failed')
     return result.stdout.strip()
@@ -175,6 +175,35 @@ def stop_all_local():
 atexit.register(stop_all_local)
 
 
+def bun_script(item):
+    script = 'dev' if environment(item) == 'development' else 'start'
+    manifest = Path(item['path']) / 'package.json'
+    try:
+        package = json.loads(manifest.read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError(f'Cannot read package.json in {item["path"]}. Select the directory containing your Bun project.') from error
+    scripts = package.get('scripts', {}) if isinstance(package, dict) else {}
+    if not isinstance(scripts, dict) or not isinstance(scripts.get(script), str) or not scripts[script].strip():
+        raise ValueError(f'{environment(item).capitalize()} runs bun run {script}, but package.json has no "{script}" script. Add scripts.{script} to your project.')
+    return script
+
+
+def install_bun_dependencies(item, bun):
+    # Do not expose the panel token to project lifecycle scripts.
+    install_env = {key: value for key, value in os.environ.items()
+                   if key in ('PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL')}
+    install_env['NODE_ENV'] = 'development'  # Include tools needed by dev/build scripts.
+    args = [bun, 'install']
+    if SYSTEM:
+        args = ['runuser', '-u', 'hosty', '--', *args]
+    try:
+        command(args, cwd=item['path'], env=install_env, timeout=300)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError('bun install exceeded 5 minutes. Check network access and project install scripts, then retry.') from error
+    except (ValueError, OSError) as error:
+        raise ValueError(f'Dependency installation failed in {item["path"]}:\n{error}') from error
+
+
 def start_local(item):
     process = PROCESSES.get(item['id'])
     if process and process.poll() is None:
@@ -197,7 +226,8 @@ def start_local(item):
         bun = shutil.which('bun')
         if not bun:
             raise ValueError('Install Bun before starting a Bun application.')
-        args = [bun, 'run', 'start']
+        args = [bun, 'run', bun_script(item)]
+        install_bun_dependencies(item, bun)
     logs = DATA / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
     with (logs / f'{item["id"]}.log').open('ab') as output:
@@ -215,7 +245,7 @@ def start_local(item):
             time.sleep(0.1)
 
 
-def provision(item):
+def configure_app_service(item):
     ident = item['id']
     runtime = item['runtime']
     path = item['path']
@@ -234,7 +264,8 @@ def provision(item):
         bun = shutil.which('bun')
         if not bun:
             raise ValueError('Install Bun in a system-wide location before adding a Bun app.')
-        executable = f'{bun} run start'
+        executable = f'{bun} run {bun_script(item)}'
+        install_bun_dependencies(item, bun)
     unit = f'''[Unit]
 Description=Hosty app {ident}
 After=network.target
@@ -256,6 +287,12 @@ PrivateTmp=true
 WantedBy=multi-user.target
 '''
     Path(f'/etc/systemd/system/hosty-app-{ident}.service').write_text(unit)
+
+
+def provision(item):
+    configure_app_service(item)
+    ident = item['id']
+    port = item['port']
     config = f'''server {{
     listen 80;
     server_name {item['domain']};
@@ -491,8 +528,8 @@ class Handler(BaseHTTPRequestHandler):
                 save(items)
             else:
                 if action in ('start', 'restart'):
-                    prepare_app_permissions(item)
-                    check_app_access(item)
+                    configure_app_service(item)
+                    command(['systemctl', 'daemon-reload'])
                 service_action(item, action)
             self.reply(status(item))
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
