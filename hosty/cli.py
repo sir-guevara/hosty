@@ -152,8 +152,11 @@ def install():
         configure_panel_alias(domain=config['domain'])
     from . import server
     server.SYSTEM = True
+    server.DATA = data
     subprocess.run(['systemctl', 'enable', '--now', 'nginx'], check=True)
     server.configure_panel_domain(config['domain'], 8787)
+    for app in server.apps():
+        server.write_app_route(app)
     token = secrets.token_urlsafe(32)
     env = Path('/etc/hosty.env')
     if not env.exists():

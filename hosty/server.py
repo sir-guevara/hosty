@@ -1,4 +1,5 @@
 import hmac
+import http.client
 import atexit
 import json
 import os
@@ -340,13 +341,13 @@ WantedBy=multi-user.target
     Path(f'/etc/systemd/system/hosty-app-{ident}.service').write_text(unit)
 
 
-def provision(item):
-    configure_app_service(item)
+def write_app_route(item):
     ident = item['id']
     port = item['port']
     config = f'''server {{
     listen 80;
     server_name {item['domain']};
+    add_header X-Hosty-App {ident} always;
     location / {{
         proxy_pass http://127.0.0.1:{port};
         proxy_set_header Host $host;
@@ -356,17 +357,52 @@ def provision(item):
 }}
 '''
     nginx_path = Path(f'/etc/nginx/conf.d/hosty-{ident}.conf')
+    original = nginx_path.read_text() if nginx_path.exists() else None
     if environment(item) == 'production':
         if item.get('ssl') and nginx_path.exists():
             config = re.sub(r'proxy_pass http://127\.0\.0\.1:[0-9]+;', f'proxy_pass http://127.0.0.1:{port};', nginx_path.read_text())
+        if 'add_header X-Hosty-App ' not in config:
+            config = re.sub(r'\bserver\s*\{', lambda match: match.group(0) + f'\n    add_header X-Hosty-App {ident} always;', config)
         nginx_path.write_text(config)
     else:
         nginx_path.unlink(missing_ok=True)
-    command(['nginx', '-t'])
+    try:
+        command(['nginx', '-t'])
+        command(['systemctl', 'reload', 'nginx'])
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        if original is None:
+            nginx_path.unlink(missing_ok=True)
+        else:
+            nginx_path.write_text(original)
+        raise
+
+
+def provision(item):
+    configure_app_service(item)
+    write_app_route(item)
     command(['systemctl', 'daemon-reload'])
-    command(['systemctl', 'reload', 'nginx'])
-    command(['systemctl', 'enable', f'hosty-app-{ident}'])
+    command(['systemctl', 'enable', f'hosty-app-{item["id"]}'])
     service_action(item, 'restart')
+
+
+def routing_status(item):
+    if environment(item) == 'development':
+        return {'state': 'local', 'message': 'Development: production domain is not published.'}
+    if not SYSTEM:
+        return {'state': 'unavailable', 'message': 'Production routing requires an installed server.'}
+    connection = http.client.HTTPConnection('127.0.0.1', 80, timeout=1)
+    try:
+        connection.request('HEAD', '/', headers={'Host': item['domain']})
+        response = connection.getresponse()
+        if response.getheader('X-Hosty-App') != item['id']:
+            return {'state': 'error', 'message': 'Domain is reaching a different Nginx site. Repair routing in Hosty.'}
+        if response.status in (502, 503, 504):
+            return {'state': 'error', 'message': 'Domain routing is applied, but the app is not responding. Check its status and logs.'}
+        return {'state': 'ready', 'message': 'Nginx route verified on this server. Domain DNS must point here.'}
+    except (OSError, http.client.HTTPException):
+        return {'state': 'error', 'message': 'Nginx is not responding on this server. Repair routing in Hosty.'}
+    finally:
+        connection.close()
 
 
 def select_app_port(raw, items, current=None, panel_port=8787):
@@ -524,7 +560,7 @@ class Handler(BaseHTTPRequestHandler):
                 config = read_config(DATA)
                 return self.reply({'username': config['username'], 'domain': config['domain'], 'panel_port': self.server.server_port, 'system': SYSTEM})
             if self.path == '/api/overview':
-                return self.reply({'server': metrics(), 'apps': [status(a) for a in apps()]})
+                return self.reply({'server': metrics(), 'apps': [{**status(a), 'routing': routing_status(a)} for a in apps()]})
             return self.reply({'error': 'Not found'}, 404)
         filename = {'/': 'index.html', '/style.css': 'style.css', '/app.js': 'app.js', '/lineicons.css': 'lineicons.css', '/lineicons.woff2': 'lineicons.woff2'}.get(self.path.split('?')[0])
         if not filename:
@@ -658,13 +694,19 @@ class Handler(BaseHTTPRequestHandler):
                         result['warning'] = str(error)
                         return self.reply(result, 201)
                 return self.reply(status(item), 201)
-            match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/(start|stop|restart|ssl|logs|environment|delete)', self.path)
+            match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/(start|stop|restart|ssl|logs|environment|delete|repair)', self.path)
             if not match:
                 return self.reply({'error': 'Not found'}, 404)
             ident, action = match.groups()
             item = next((a for a in items if a['id'] == ident), None)
             if not item:
                 return self.reply({'error': 'App not found'}, 404)
+            if action == 'repair':
+                if not SYSTEM or environment(item) != 'production':
+                    raise ValueError('Routing repair is for Production apps on installed servers.')
+                command(['systemctl', 'start', 'nginx'])
+                write_app_route(item)
+                return self.reply({**status(item), 'routing': routing_status(item)})
             if action == 'delete':
                 if data.get('confirmation') != 'DELETE':
                     raise ValueError('Type DELETE exactly to confirm app deletion.')
@@ -742,6 +784,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 if action in ('start', 'restart'):
                     configure_app_service(item)
+                    write_app_route(item)
                     command(['systemctl', 'daemon-reload'])
                 service_action(item, action)
             self.reply(status(item))
