@@ -306,6 +306,8 @@ def provision(item):
 '''
     nginx_path = Path(f'/etc/nginx/conf.d/hosty-{ident}.conf')
     if environment(item) == 'production':
+        if item.get('ssl') and nginx_path.exists():
+            config = re.sub(r'proxy_pass http://127\.0\.0\.1:[0-9]+;', f'proxy_pass http://127.0.0.1:{port};', nginx_path.read_text())
         nginx_path.write_text(config)
     else:
         nginx_path.unlink(missing_ok=True)
@@ -314,6 +316,64 @@ def provision(item):
     command(['systemctl', 'reload', 'nginx'])
     command(['systemctl', 'enable', f'hosty-app-{ident}'])
     service_action(item, 'restart')
+
+
+def select_app_port(raw, items, current=None, panel_port=8787):
+    used = {app['port'] for app in items if not current or app['id'] != current['id']}
+    automatic = raw is None or raw == ''
+    if automatic:
+        port = current['port'] if current else 9000
+    else:
+        if isinstance(raw, bool) or not re.fullmatch(r'[0-9]+', str(raw)):
+            raise ValueError('App port must be a whole number from 1024 to 65535.')
+        port = int(raw)
+    while port <= 65535:
+        if port < 1024:
+            break
+        unavailable = port in used or port == panel_port
+        if not unavailable and not (current and port == current['port']):
+            with socket.socket() as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    probe.bind(('127.0.0.1', port))
+                except OSError:
+                    unavailable = True
+        if not unavailable:
+            return port
+        if not automatic:
+            raise ValueError(f'Port {port} is already in use. Choose another app port.')
+        port += 1
+    raise ValueError('Choose an available app port from 1024 to 65535.')
+
+
+def update_app(items, item, candidate):
+    was_running = status(item)['status'] == 'running'
+    if SYSTEM:
+        paths = [Path(f'/etc/systemd/system/hosty-app-{item["id"]}.service'), Path(f'/etc/nginx/conf.d/hosty-{item["id"]}.conf')]
+        backups = {path: path.read_text() if path.exists() else None for path in paths}
+    try:
+        if SYSTEM:
+            provision(candidate)
+            if not was_running:
+                service_action(candidate, 'stop')
+        elif was_running:
+            stop_local(item['id'])
+            start_local(candidate)
+        save([candidate if app['id'] == item['id'] else app for app in items])
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        if SYSTEM:
+            for path, content in backups.items():
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(content)
+            command(['systemctl', 'daemon-reload'])
+            command(['systemctl', 'reload', 'nginx'])
+            service_action(item, 'restart' if was_running else 'stop')
+        elif was_running:
+            stop_local(item['id'])
+            start_local(item)
+        raise
 
 
 def delete_app(items, item):
@@ -394,7 +454,14 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Request too large')
             data = json.loads(self.rfile.read(length) or '{}')
             items = apps()
-            if self.path == '/api/apps':
+            edit_match = re.fullmatch(r'/api/apps/([a-f0-9]{12})/edit', self.path)
+            existing = None
+            if edit_match:
+                existing = next((app for app in items if app['id'] == edit_match.group(1)), None)
+                if not existing:
+                    return self.reply({'error': 'App not found'}, 404)
+                data = {**existing, **data}
+            if self.path == '/api/apps' or edit_match:
                 name = str(data.get('name', '')).strip()
                 domain = str(data.get('domain', '')).strip().lower()
                 dev_domain = str(data.get('dev_domain', '')).strip().lower()
@@ -424,9 +491,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError(f'Hosty cannot access {path}. Give the user running Hosty permission to traverse this directory and its parent directories.')
                 if not stat.S_ISDIR(directory_mode):
                     raise ValueError(f'App path is a file, not a directory: {path}. Select the folder containing your app.')
-                if domain and any(a['domain'] == domain for a in items):
+                if domain and any(a['domain'] == domain and (not existing or a['id'] != existing['id']) for a in items):
                     raise ValueError('This domain is already assigned to an app.')
-                item = {'id': secrets.token_hex(6), 'name': name, 'domain': domain, 'dev_domain': dev_domain, 'path': path, 'runtime': runtime, 'port': max([a['port'] for a in items] + [8999]) + 1, 'created': time.time(), 'ssl': False, 'environment': mode}
+                item = {'id': secrets.token_hex(6), 'name': name, 'domain': domain, 'dev_domain': dev_domain, 'path': path, 'runtime': runtime, 'port': select_app_port(data.get('port'), items, existing, self.server.server_port), 'created': time.time(), 'ssl': False, 'environment': mode}
+                if existing:
+                    candidate = {**existing, **item, 'id': existing['id'], 'created': existing.get('created', item['created'])}
+                    candidate['ssl'] = existing.get('ssl', False) and domain == existing['domain'] and mode == environment(existing)
+                    update_app(items, existing, candidate)
+                    return self.reply(status(candidate))
                 if SYSTEM:
                     try:
                         provision(item)

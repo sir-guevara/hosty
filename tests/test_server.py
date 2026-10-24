@@ -213,6 +213,44 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(route.read_text(), 'original nginx')
         self.assertEqual(server.apps(), [item])
 
+    def test_edit_running_app_changes_port_and_preserves_identity(self):
+        import socket
+        app = self.request('/api/apps', {'name': 'Before', 'runtime': 'html', 'path': self.temp.name})
+        old_process = server.PROCESSES[app['id']]
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        updated = self.request(f'/api/apps/{app["id"]}/edit', {'name': 'After', 'port': str(port)})
+        self.assertEqual(updated['id'], app['id'])
+        self.assertEqual(updated['created'], app['created'])
+        self.assertEqual(updated['name'], 'After')
+        self.assertEqual(updated['port'], port)
+        self.assertEqual(updated['status'], 'running')
+        self.assertTrue(updated['local_url'].endswith(f':{port}'))
+        self.assertIsNotNone(old_process.poll())
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}') as response:
+            self.assertEqual(response.status, 200)
+        self.assertEqual(len(server.apps()), 1)
+
+    def test_invalid_edit_ports_leave_saved_app_unchanged(self):
+        item = {'id': 'abcdef123456', 'name': 'Tool', 'domain': '', 'dev_domain': '', 'path': self.temp.name, 'runtime': 'html', 'port': 9000, 'created': 1, 'environment': 'development'}
+        server.save([item])
+        for port in [True, 'abc', '3.5', 80, 65536, self.http.server_port]:
+            with self.subTest(port=port), self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.request('/api/apps/abcdef123456/edit', {'port': port})
+            self.assertEqual(ctx.exception.code, 400)
+            self.assertEqual(server.apps(), [item])
+
+    def test_edit_failure_restores_previous_app(self):
+        item = {'id': 'abcdef123456', 'name': 'Tool', 'domain': '', 'path': self.temp.name, 'runtime': 'html', 'port': 9000, 'created': 1, 'environment': 'development'}
+        server.save([item])
+        with patch.object(server, 'status', return_value={'status': 'running'}), patch.object(server, 'stop_local'), patch.object(server, 'start_local', side_effect=[ValueError('New app failed'), None]) as start:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.request('/api/apps/abcdef123456/edit', {'name': 'Changed'})
+            self.assertEqual(ctx.exception.code, 400)
+            self.assertEqual(start.call_args.args[0], item)
+        self.assertEqual(server.apps(), [item])
+
 if __name__ == '__main__':
     unittest.main()
 

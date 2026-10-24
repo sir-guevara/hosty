@@ -70,3 +70,9 @@ python3 -m unittest discover -s tests -v
 ## Delete an app
 
 Click the trash icon, type `DELETE` exactly, then select **Delete application**. Hosty stops the app, removes its systemd unit and Nginx route on installed servers, and removes its panel entry. Project files, issued certificate files, logs, and permission grants remain on disk. Other apps are kept. If service cleanup fails, Hosty retains the app entry and attempts to restore its previous configuration.
+
+## Edit an app and its port
+
+Use the pencil icon to edit an app’s name, runtime, directory, environment, production domain, development hostname, and app port. Ports may be 1024–65535; leaving the port blank selects one automatically (or keeps the current port when editing). Hosty rejects ports reserved by another app, occupied ports, and the panel’s own port.
+
+Python receives the configured port via Uvicorn’s `--port`; Bun receives `PORT` and `HOST`. If your framework uses a hardcoded port instead, choose that same port in Hosty or update your script to honor `PORT`. Hosty uses this port in its development URL and production Nginx upstream. Saving restarts a running app and preserves stopped apps as stopped. Failed edits attempt to restore the previous service and configuration. Port-only changes preserve an existing HTTPS configuration; changing the production domain or environment requires enabling SSL again.

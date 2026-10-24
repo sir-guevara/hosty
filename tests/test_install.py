@@ -219,3 +219,25 @@ class BunDependencyInstallTest(unittest.TestCase):
         with patch('hosty.server.SYSTEM', False), self.assertRaisesRegex(ValueError, 'Package download failed'):
             install_bun_dependencies({'path': '/tmp/project'}, '/usr/local/bin/bun')
         self.assertEqual(command.call_args.args[0], ['/usr/local/bin/bun', 'install'])
+
+class AppPortTest(unittest.TestCase):
+    def test_duplicate_port_rejected(self):
+        from hosty.server import select_app_port
+        with self.assertRaisesRegex(ValueError, 'already in use'):
+            select_app_port('9000', [{'id': 'other', 'port': 9000}])
+
+    @patch('hosty.server.command')
+    def test_production_port_edit_keeps_https_configuration(self, command):
+        import tempfile
+        from hosty.server import provision
+        with tempfile.TemporaryDirectory() as temporary:
+            nginx = Path(temporary) / 'hosty-abcdef123456.conf'
+            nginx.write_text('server { listen 443 ssl; ssl_certificate /etc/cert.pem; location / { proxy_pass http://127.0.0.1:9000; } }')
+            def mapped(path):
+                return Path(temporary) / Path(path).name
+            item = {'id': 'abcdef123456', 'name': 'Tool', 'domain': 'example.com', 'path': '/var/www/project', 'runtime': 'html', 'port': 3000, 'environment': 'production', 'ssl': True}
+            with patch('hosty.server.SYSTEM', False), patch('hosty.server.Path', side_effect=mapped):
+                provision(item)
+            self.assertIn('listen 443 ssl', nginx.read_text())
+            self.assertIn('proxy_pass http://127.0.0.1:3000;', nginx.read_text())
+            self.assertIn('ssl_certificate /etc/cert.pem', nginx.read_text())
