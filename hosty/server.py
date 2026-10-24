@@ -115,6 +115,22 @@ def version(executable):
         return 'Not installed'
 
 
+def firewall_status():
+    if not SYSTEM:
+        return 'Not managed (local mode)'
+    if not shutil.which('ufw'):
+        return 'Not installed'
+    try:
+        output = command(['ufw', 'status'], env={**os.environ, 'LC_ALL': 'C'}, timeout=10)
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        return 'Unable to read UFW status'
+    if 'Status: active' in output:
+        return 'Active (UFW)'
+    if 'Status: inactive' in output:
+        return 'Inactive (UFW)'
+    return 'Unknown (UFW)'
+
+
 def metrics():
     disk = shutil.disk_usage('/')
     memory = {'used': 0, 'total': 0}
@@ -126,7 +142,7 @@ def metrics():
         ip = socket.gethostbyname(socket.gethostname())
     except OSError:
         ip = '127.0.0.1'
-    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'go': version('go'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'app_home': app_home(), 'firewall': 'Unverified', 'ssh': 'Managed on server'}
+    return {'hostname': socket.gethostname(), 'ip': ip, 'os': platform.system() + ' ' + platform.release(), 'cores': os.cpu_count(), 'timezone': time.tzname[0], 'python': platform.python_version(), 'bun': version('bun'), 'go': version('go'), 'uptime': uptime, 'load': os.getloadavg()[0], 'memory': memory, 'disk': {'used': disk.used, 'total': disk.total}, 'system': SYSTEM, 'dev': DEV, 'app_home': app_home(), 'firewall': firewall_status(), 'ssh': 'Managed on server'}
 
 
 def development_domain(item):

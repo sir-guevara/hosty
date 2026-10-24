@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import json
+import re
 from pathlib import Path
 from .paths import app_home
 from .auth import ensure_config
@@ -13,7 +14,7 @@ from .auth import ensure_config
 PACKAGES = (
     'python3', 'python3-venv', 'python3-pip', 'python3-uvicorn', 'python3-dev',
     'nginx', 'certbot', 'python3-certbot-nginx', 'curl', 'unzip',
-    'ca-certificates', 'git', 'openssh-server', 'build-essential', 'pkg-config', 'acl', 'golang-go',
+    'ca-certificates', 'git', 'openssh-server', 'build-essential', 'pkg-config', 'acl', 'golang-go', 'ufw',
 )
 SYSTEM_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
@@ -83,6 +84,41 @@ def configure_panel_alias(hosts_path=Path('/etc/hosts'), domain='hosty.localhost
         output.write(('' if text.endswith('\n') else '\n') + f'127.0.0.1 {domain} # Hosty panel\n')
 
 
+def configure_firewall():
+    """Allow SSH before activating UFW; keep existing firewall rules."""
+    locale = {**os.environ, 'LC_ALL': 'C'}
+    ssh = subprocess.run(['sshd', '-T'], capture_output=True, text=True, env=locale)
+    ports = set()
+    if ssh.returncode == 0:
+        for line in ssh.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 2 and fields[0] == 'port' and fields[1].isdigit():
+                ports.add(int(fields[1]))
+    socket_status = subprocess.run(['systemctl', 'show', 'ssh.socket', '-p', 'ActiveState', '-p', 'Listen'], capture_output=True, text=True, env=locale)
+    if 'ActiveState=active' in socket_status.stdout:
+        socket_ports = re.findall(r'(?:\]:|:)([0-9]+)\s+\(Stream\)', socket_status.stdout)
+        if not socket_ports:
+            raise RuntimeError('Could not identify active SSH socket ports. Firewall was not enabled.')
+        ports.update(int(port) for port in socket_ports)
+    connection = os.environ.get('SSH_CONNECTION', '').split()
+    if len(connection) == 4 and connection[3].isdigit():
+        ports.add(int(connection[3]))
+    ports = {port for port in ports if 1 <= port <= 65535}
+    if not ports:
+        raise RuntimeError('Could not determine the SSH port. Firewall was not enabled. Check sshd configuration and rerun install.')
+    # Insert before pre-existing deny rules so the current SSH connection remains usable.
+    for port in sorted(ports):
+        subprocess.run(['ufw', 'insert', '1', 'allow', f'{port}/tcp', 'comment', 'Hosty SSH'], check=True, env=locale)
+    for port in (80, 443):
+        subprocess.run(['ufw', 'insert', '1', 'allow', f'{port}/tcp', 'comment', 'Hosty web'], check=True, env=locale)
+    status = subprocess.run(['ufw', 'status'], capture_output=True, text=True, check=True, env=locale)
+    if 'Status: active' not in status.stdout:
+        subprocess.run(['ufw', 'default', 'deny', 'incoming'], check=True, env=locale)
+        subprocess.run(['ufw', 'default', 'allow', 'outgoing'], check=True, env=locale)
+        subprocess.run(['ufw', '--force', 'enable'], check=True, env=locale)
+    subprocess.run(['ufw', 'status', 'verbose'], check=True, env=locale)
+
+
 def install():
     if os.geteuid() != 0 or not Path('/etc/debian_version').exists():
         raise SystemExit('Run sudo hosty install on an Ubuntu server.')
@@ -147,6 +183,7 @@ WantedBy=multi-user.target
     subprocess.run(['systemctl', 'enable', '--now', 'nginx', 'ssh', 'certbot.timer', 'hosty'], check=True)
     subprocess.run(['systemctl', 'restart', 'hosty'], check=True)
     subprocess.run(['systemctl', 'is-active', '--quiet', 'hosty'], check=True)
+    configure_firewall()
     print(f'Dependencies ready. Bun: {bun}. Python ASGI runtime: /usr/bin/python3.', flush=True)
     print('Hosty installed. Connect securely with: ssh -L 8787:127.0.0.1:8787 root@YOUR_SERVER')
     print(f'Open http://{config["domain"]} on this machine. Username: {config["username"]}. Use your configured password.')

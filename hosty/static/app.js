@@ -47,6 +47,8 @@ function render() {
   $('python-version').textContent = s.python;
   $('go-version').textContent = s.go || 'Not installed';
   $('timezone').textContent = s.timezone;
+  $('firewall-status').textContent = s.firewall;
+  $('firewall-status').classList.toggle('firewall-active', s.firewall === 'Active (UFW)');
   $('ssh-command').textContent = `ssh user@${s.ip}`;
   updateFormEnvironment();
   $('path-help').textContent = `Directory on ${s.hostname}. ~/ expands to ${s.app_home}/. Use a dedicated project folder; installed Hosty configures app access automatically.`;
@@ -112,7 +114,7 @@ $('auth-dialog').addEventListener('cancel', e => e.preventDefault());
 $('disconnect').onclick = async () => { try { await api('logout', {}); location.reload(); } catch (error) { toast(error.message); } };
 function info(title, text) { $('info-title').textContent = title; $('info-content').textContent = text; $('info-dialog').showModal(); }
 $('info-close').onclick = () => $('info-dialog').close();
-$('access-details').onclick = () => info('SSH & SFTP access', 'Connect using an existing SSH user and key on your VPS.\n\n' + $('ssh-command').textContent + '\n\nFor file transfers, use port 22 in your SFTP client with the same account.\n\nHosty does not store SSH passwords or toggle SSH access. Manage access with sshd and your server firewall.');
+$('access-details').onclick = () => info('SSH & SFTP access', 'Connect using an existing SSH user and key on your VPS.\n\n' + $('ssh-command').textContent + '\n\nFor file transfers, use port 22 in your SFTP client with the same account.\n\nHosty does not store SSH passwords or toggle SSH access. The installer configures UFW for SSH and web traffic. Manage additional rules directly on the server.');
 async function copy(text) { try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); } catch { info('Copy connection', text); } }
 $('copy-ip').onclick = () => copy(state.server.ip);
 $('copy-ssh').onclick = () => copy($('ssh-command').textContent);

@@ -428,3 +428,5 @@ form > label > select { display: block; width: 100%; margin: 8px 0; padding: 11p
 .runtime-options { grid-template-columns: repeat(2, 1fr); }
 .runtime-icon.go { color: #246a80; background: #e3f3f7; border-color: #b3d5df; }
 @media (max-width: 520px) { .runtime-options { grid-template-columns: 1fr; } }
+.firewall-badge { font-size: 11px; color: #6c5844; background: #f7f0e4; border: 1px solid #d9ccb3; padding: 4px 7px; border-radius: 4px; }
+.firewall-badge.firewall-active { color: #285a29; background: #e0efcf; border-color: #aac795; }
