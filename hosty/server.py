@@ -1,5 +1,7 @@
 import hmac
 import http.client
+import ssl
+import ipaddress
 import atexit
 import json
 import os
@@ -371,8 +373,8 @@ def write_app_route(item):
     if environment(item) == 'production':
         if item.get('ssl') and nginx_path.exists():
             config = re.sub(r'proxy_pass http://127\.0\.0\.1:[0-9]+;', f'proxy_pass http://127.0.0.1:{port};', nginx_path.read_text())
-        if 'add_header X-Hosty-App ' not in config:
-            config = re.sub(r'\bserver\s*\{', lambda match: match.group(0) + f'\n    add_header X-Hosty-App {ident} always;', config)
+        config = re.sub(r'add_header\s+X-Hosty-App\s+[^;]+;', '', config)
+        config = re.sub(r'\bserver\s*\{', lambda match: match.group(0) + f'\n    add_header X-Hosty-App {ident} always;', config)
         config = add_ipv6_listeners(config)
         nginx_path.write_text(config)
     else:
@@ -403,6 +405,13 @@ def routing_status(item):
         return {'state': 'unavailable', 'message': 'Production routing requires an installed server.'}
     connection = http.client.HTTPConnection('127.0.0.1', 80, timeout=1)
     try:
+        if item.get('ssl'):
+            raw = socket.create_connection(('127.0.0.1', 443), timeout=2)
+            try:
+                connection.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=item['domain'])
+            except Exception:
+                raw.close()
+                raise
         connection.request('HEAD', '/', headers={'Host': item['domain']})
         response = connection.getresponse()
         if response.getheader('X-Hosty-App') != item['id']:
@@ -410,6 +419,8 @@ def routing_status(item):
         if response.status in (502, 503, 504):
             return {'state': 'error', 'message': 'Domain routing is applied, but the app is not responding. Check its status and logs.'}
         return {'state': 'ready', 'message': 'Nginx route verified on this server. Domain DNS must point here.'}
+    except ssl.SSLCertVerificationError:
+        return {'state': 'error', 'message': 'The app HTTPS certificate could not be verified. Check its domain and expiry.'}
     except (OSError, http.client.HTTPException):
         return {'state': 'error', 'message': 'Nginx is not responding on this server. Repair routing in Hosty.'}
     finally:
@@ -571,6 +582,30 @@ def configure_panel_domain(domain, port):
         raise
 
 
+def public_certificate_domain(domain):
+    if domain.endswith(('.localhost', '.local', '.test', '.invalid', '.example')) or domain == 'localhost':
+        return False
+    try:
+        ipaddress.ip_address(domain)
+        return False
+    except ValueError:
+        return True
+
+
+def issue_panel_certificate(config, email, port):
+    if not SYSTEM:
+        raise ValueError('Panel SSL requires an installed Ubuntu server.')
+    if not public_certificate_domain(config['domain']):
+        raise ValueError('Use a public panel domain with DNS pointing to this server. Local hostnames cannot receive a Let’s Encrypt certificate.')
+    if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email):
+        raise ValueError('Enter a valid certificate notification email.')
+    configure_panel_domain(config['domain'], port)
+    command(['certbot', '--nginx', '-d', config['domain'], '--non-interactive', '--agree-tos', '-m', email, '--redirect'])
+    updated = {**config, 'ssl': True}
+    write_config(DATA, updated)
+    return updated
+
+
 class Handler(BaseHTTPRequestHandler):
     def reply(self, data, code=200, cookie=None):
         body = json.dumps(data).encode()
@@ -602,9 +637,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'error': 'Enter your panel token to connect.'}, 401)
             if self.path == '/api/settings':
                 config = read_config(DATA)
-                return self.reply({'username': config['username'], 'domain': config['domain'], 'panel_port': self.server.server_port, 'system': SYSTEM})
+                return self.reply({'username': config['username'], 'domain': config['domain'], 'panel_port': self.server.server_port, 'system': SYSTEM, 'ssl': config.get('ssl', False)})
             if self.path == '/api/overview':
-                return self.reply({'server': metrics(), 'apps': [{**status(a), 'routing': routing_status(a)} for a in apps()]})
+                return self.reply({'panel': {'domain': (read_config(DATA) or {}).get('domain'), 'ssl': (read_config(DATA) or {}).get('ssl', False)}, 'server': metrics(), 'apps': [{**status(a), 'routing': routing_status(a)} for a in apps()]})
             return self.reply({'error': 'Not found'}, 404)
         filename = {'/': 'index.html', '/style.css': 'style.css', '/app.js': 'app.js', '/lineicons.css': 'lineicons.css', '/lineicons.woff2': 'lineicons.woff2'}.get(self.path.split('?')[0])
         if not filename:
@@ -656,6 +691,9 @@ class Handler(BaseHTTPRequestHandler):
                     SESSIONS.pop(cookies['hosty_session'].value, None)
                 return self.reply({'ok': True}, cookie='hosty_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
             items = apps()
+            if self.path == '/api/settings/ssl':
+                updated = issue_panel_certificate(config, str(data.get('email', '')), self.server.server_port)
+                return self.reply({'ssl': True, 'domain': updated['domain']})
             if self.path == '/api/settings':
                 if not config or not verify(config, str(data.get('current_password', ''))):
                     raise ValueError('Enter your current password to change settings.')
@@ -663,6 +701,7 @@ class Handler(BaseHTTPRequestHandler):
                 domain = str(data.get('domain', config['domain'])).strip().lower()
                 password = str(data.get('password', ''))
                 updated = account(username, password or str(data['current_password']), domain)
+                updated['ssl'] = config.get('ssl', False) and domain == config['domain']
                 if any(app.get('domain') == domain for app in items):
                     raise ValueError('That domain is already assigned to an app.')
                 configure_panel_domain(domain, self.server.server_port)
@@ -827,6 +866,14 @@ class Handler(BaseHTTPRequestHandler):
                 command(['certbot', '--nginx', '-d', item['domain'], '--non-interactive', '--agree-tos', '-m', email, '--redirect'])
                 item['ssl'] = True
                 save(items)
+                write_app_route(item)
+                warning = None
+                if config and public_certificate_domain(config['domain']) and not config.get('ssl'):
+                    try:
+                        issue_panel_certificate(config, email, self.server.server_port)
+                    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                        warning = f'App HTTPS is ready, but panel HTTPS failed: {error}'
+                return self.reply({**status(item), 'warning': warning})
             else:
                 if action in ('start', 'restart'):
                     configure_app_service(item)

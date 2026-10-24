@@ -94,6 +94,48 @@ class AccountTest(unittest.TestCase):
         self.assertEqual(error.exception.code, 403)
         self.assertEqual(read_config(server.DATA), self.config)
 
+    def test_panel_ssl_requires_public_hostname(self):
+        cookie = self.login()
+        with patch.object(server, 'SYSTEM', True), self.assertRaises(urllib.error.HTTPError) as error:
+            self.request('settings/ssl', {'email': 'me@example.com'}, cookie)
+        self.assertEqual(error.exception.code, 400)
+        self.assertIn('public panel domain', json.load(error.exception)['error'])
+
+    def test_panel_ssl_can_be_enabled_from_settings(self):
+        from hosty.auth import write_config
+        config = {**self.config, 'domain': 'panel.example.com'}
+        write_config(server.DATA, config)
+        cookie = self.login()
+        with patch.object(server, 'SYSTEM', True), patch.object(server, 'configure_panel_domain'), patch.object(server, 'command') as command:
+            result, _ = self.request('settings/ssl', {'email': 'me@example.com'}, cookie)
+        self.assertTrue(result['ssl'])
+        self.assertTrue(read_config(server.DATA)['ssl'])
+        command.assert_any_call(['certbot', '--nginx', '-d', 'panel.example.com', '--non-interactive', '--agree-tos', '-m', 'me@example.com', '--redirect'])
+
+    def test_app_ssl_automatically_includes_panel_setup(self):
+        from hosty.auth import write_config
+        write_config(server.DATA, {**self.config, 'domain': 'panel.example.com'})
+        app = {'id': 'abcdef123456', 'name': 'Tool', 'domain': 'app.example.com', 'environment': 'production', 'ssl': False}
+        server.save([app])
+        cookie = self.login()
+        with patch.object(server, 'SYSTEM', True), patch.object(server, 'configure_panel_domain'), patch.object(server, 'write_app_route'), patch.object(server, 'command') as command, patch.object(server, 'status', return_value={'ssl': True}):
+            self.request('apps/abcdef123456/ssl', {'email': 'me@example.com'}, cookie)
+        domains = [call.args[0][3] for call in command.call_args_list if call.args[0][0] == 'certbot']
+        self.assertEqual(domains, ['app.example.com', 'panel.example.com'])
+        self.assertTrue(read_config(server.DATA)['ssl'])
+        self.assertTrue(server.apps()[0]['ssl'])
+
+    def test_panel_ssl_failure_does_not_undo_app_ssl(self):
+        from hosty.auth import write_config
+        write_config(server.DATA, {**self.config, 'domain': 'panel.example.com'})
+        server.save([{'id': 'abcdef123456', 'name': 'Tool', 'domain': 'app.example.com', 'environment': 'production', 'ssl': False}])
+        cookie = self.login()
+        with patch.object(server, 'SYSTEM', True), patch.object(server, 'write_app_route'), patch.object(server, 'command'), patch.object(server, 'status', return_value={'ssl': True}), patch.object(server, 'issue_panel_certificate', side_effect=ValueError('DNS check failed')):
+            result, _ = self.request('apps/abcdef123456/ssl', {'email': 'me@example.com'}, cookie)
+        self.assertIn('DNS check failed', result['warning'])
+        self.assertTrue(server.apps()[0]['ssl'])
+
+
 
 class FirstRunTest(unittest.TestCase):
     def test_interactive_setup_uses_requested_defaults(self):

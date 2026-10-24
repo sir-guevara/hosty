@@ -434,3 +434,6 @@ form > label > select { display: block; width: 100%; margin: 8px 0; padding: 11p
 .routing-status.ready { color: #286232; }
 .routing-status.error { color: #9b3627; }
 .repair-route { font-size: 11px; color: #315f2d; text-decoration: underline; padding: 5px 0; }
+#panel-ssl-form { margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--border); max-width: 620px; }
+#panel-ssl-form input[type=checkbox] { display: inline-block; width: auto; margin-right: 8px; }
+#panel-ssl-form a { text-decoration: underline; }

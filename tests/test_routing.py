@@ -66,3 +66,17 @@ class IPv6RoutingTest(unittest.TestCase):
         self.assertEqual(len(details['matching_sites']), 2)
         self.assertIn('Multiple loaded', details['explanation'])
         self.assertIn('conflicting server name', details['nginx_messages'])
+
+class TLSRouteCheckTest(unittest.TestCase):
+    @patch('hosty.server.SYSTEM', True)
+    @patch('hosty.server.ssl.create_default_context')
+    @patch('hosty.server.socket.create_connection')
+    @patch('hosty.server.http.client.HTTPConnection')
+    def test_ssl_app_probes_tls_with_hostname_verification(self, connect, socket, context):
+        app = {'id': 'abcdef123456', 'domain': 'app.example.com', 'environment': 'production', 'ssl': True}
+        response = connect.return_value.getresponse.return_value
+        response.getheader.return_value = app['id']
+        response.status = 200
+        self.assertEqual(routing_status(app)['state'], 'ready')
+        socket.assert_called_once_with(('127.0.0.1', 443), timeout=2)
+        context.return_value.wrap_socket.assert_called_once_with(socket.return_value, server_hostname='app.example.com')

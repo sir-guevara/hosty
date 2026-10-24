@@ -40,7 +40,7 @@ The installer checks installed packages and installs missing dependencies: Pytho
 ssh -L 8787:127.0.0.1:8787 your-user@your-server
 ```
 
-Open http://localhost:8787 and sign in with your configured username and password. Passwords are salted and hashed in `panel.json`, with file permissions restricted to its owner. Login sessions expire after 12 hours or a panel restart. The old environment token cannot bypass account login. The panel service runs as root to configure Nginx, systemd, and certificates; application services run as the unprivileged `hosty` user. The panel process stays on loopback; Nginx exposes its configured domain on HTTP port 80. For remote access, set a DNS A record to the VPS and configure HTTPS on the Nginx panel site before using it over an untrusted network, or use the SSH tunnel. Change the default password in Settings before public use.
+Open http://localhost:8787 and sign in with your configured username and password. Passwords are salted and hashed in `panel.json`, with file permissions restricted to its owner. Login sessions expire after 12 hours or a panel restart. The old environment token cannot bypass account login. The panel service runs as root to configure Nginx, systemd, and certificates; application services run as the unprivileged `hosty` user. The panel process stays on loopback; Nginx exposes its configured domain on HTTP port 80. For remote access, set a DNS A record to the VPS and enable panel HTTPS in Settings before using it over an untrusted network, or use the SSH tunnel. Change the default password in Settings before public use.
 
 A published curl bootstrap URL is not included; use a clone from your own trusted repository. Installation is intended for a fresh server with no conflicting Nginx configuration.
 
@@ -79,7 +79,7 @@ Python receives the configured port via Uvicorn’s `--port`; Bun receives `PORT
 
 ## Panel account and domain
 
-Open **Settings** to change the panel username, password, or domain. Enter your current password to save; leave the new password blank to keep it. Saving signs out existing sessions and requires a fresh login. A public panel domain needs DNS pointing to this VPS; local aliases refer to the machine where the browser is running. On Ubuntu the Nginx panel route updates automatically. Existing HTTPS configuration is preserved when the domain is unchanged. Changing the hostname creates an HTTP route; configure a certificate for the new hostname separately. Local `serve` mode uses `http://DOMAIN:8787` and does not change system DNS or install Nginx.
+Open **Settings** to change the panel username, password, or domain. Enter your current password to save; leave the new password blank to keep it. Saving signs out existing sessions and requires a fresh login. A public panel domain needs DNS pointing to this VPS; local aliases refer to the machine where the browser is running. On Ubuntu the Nginx panel route updates automatically. Existing HTTPS configuration is preserved when the domain is unchanged. Changing the hostname creates an HTTP route; enable a certificate for the new hostname in Settings. Local `serve` mode uses `http://DOMAIN:8787` and does not change system DNS or install Nginx.
 
 ## Go apps
 
@@ -96,3 +96,9 @@ App ports and panel port 8787 are not opened publicly; access apps through Nginx
 ## Domain routing checks
 
 New apps default to Production on an installed VPS and Development in local mode. Hosty writes each Production app’s Nginx route automatically. The dashboard probes Nginx on loopback using that app’s domain and checks a per-app response marker, so the default welcome page is not reported as a working route. It distinguishes routing mismatches from an unavailable upstream app. Use **Repair routing** in the panel to reapply a missing or broken managed route; starting/restarting also reapplies it. Installer upgrades refresh existing app routes without rebuilding the apps. DNS still needs to point to this server; the local routing check does not verify external DNS or provider firewall rules.
+
+## Panel SSL and HTTPS route verification
+
+In **Settings → Panel HTTPS**, enter a certificate email and accept the Let’s Encrypt terms to issue or renew the panel certificate. The panel must use a public hostname whose DNS points here; `.localhost` and `.local` cannot receive public certificates. Enabling an app’s HTTPS also attempts panel HTTPS when the panel has a public hostname and is not yet marked secure. Panel issuance failures are shown separately and do not undo a successful app certificate.
+
+HTTPS app routing checks connect to Nginx on loopback port 443 with the app’s hostname as TLS SNI and normal certificate validation. HTTP redirects are not mistaken for a different site. Managed app server blocks, including Certbot redirect blocks, receive the app routing marker when routes are regenerated.

@@ -126,12 +126,13 @@ document.addEventListener('click', async e => {
   const operation = action ? button.dataset.action : 'ssl';
   let body = {};
   if (operation === 'ssl') {
-    const email = prompt('Email for Let’s Encrypt certificate notices (agreeing to Let’s Encrypt terms):');
+    const panelNote = state.panel?.domain && !state.panel.ssl ? ` Hosty will also try to secure the panel domain (${state.panel.domain}) if it is public.` : '';
+    const email = prompt('Email for Let’s Encrypt certificate notices (agreeing to Let’s Encrypt terms).' + panelNote);
     if (!email) return;
     body.email = email;
   }
   button.disabled = true;
-  try { const result = await api(`apps/${id}/${operation}`, body); if (operation === 'routing') info('Domain routing details', JSON.stringify(result, null, 2)); else if (operation === 'logs') info('Application logs', result.logs || 'No log entries yet.'); else { await refresh(); toast(operation === 'repair' ? (result.routing?.message || 'Routing updated.') : operation === 'ssl' ? 'HTTPS certificate is ready.' : `Application ${operation === 'stop' ? 'stopped' : operation === 'restart' ? 'restarted' : 'started'}.`); } }
+  try { const result = await api(`apps/${id}/${operation}`, body); if (operation === 'routing') info('Domain routing details', JSON.stringify(result, null, 2)); else if (operation === 'logs') info('Application logs', result.logs || 'No log entries yet.'); else { await refresh(); toast(result.warning || (operation === 'repair' ? (result.routing?.message || 'Routing updated.') : operation === 'ssl' ? 'HTTPS certificate is ready.' : `Application ${operation === 'stop' ? 'stopped' : operation === 'restart' ? 'restarted' : 'started'}.`)); } }
   catch(error) { if (error.message.includes('\n')) info('Application could not start', error.message); else toast(error.message); }
   finally { button.disabled = false; }
 });
@@ -225,8 +226,11 @@ document.addEventListener('click', e => {
 async function loadSettings() {
   const settings = await api('settings');
   $('settings-username').value = settings.username;
+  $('panel-ssl-status').textContent = settings.ssl ? 'HTTPS enabled for ' + settings.domain : 'HTTPS is not enabled. Use a public domain pointing to this server.';
+  $('panel-ssl-submit').textContent = settings.ssl ? 'Renew panel HTTPS' : 'Enable panel HTTPS';
+  $('panel-ssl-submit').disabled = !settings.system;
   $('settings-domain').value = settings.domain;
-  $('settings-address').textContent = settings.system ? `Panel address: http://${settings.domain}. Configure DNS for access from other machines.` : `Panel address: http://${settings.domain}:${settings.panel_port}. This hostname must resolve to the machine running Hosty.`;
+  $('settings-address').textContent = settings.system ? `Panel address: ${settings.ssl ? 'https' : 'http'}://${settings.domain}. Configure DNS for access from other machines.` : `Panel address: http://${settings.domain}:${settings.panel_port}. This hostname must resolve to the machine running Hosty.`;
 }
 $('settings-form').onsubmit = async e => {
   e.preventDefault(); $('settings-submit').disabled = true; $('settings-error').textContent = '';
@@ -238,4 +242,14 @@ $('settings-form').onsubmit = async e => {
     toast('Settings saved. Sign in again with your account.');
   } catch (error) { $('settings-error').textContent = error.message; }
   finally { $('settings-submit').disabled = false; }
+};
+
+$('panel-ssl-form').onsubmit = async e => {
+  e.preventDefault(); $('panel-ssl-submit').disabled = true; $('panel-ssl-error').textContent = '';
+  try {
+    const result = await api('settings/ssl', {email: $('panel-ssl-email').value.trim()});
+    await loadSettings();
+    toast(`Panel HTTPS ready at https://${result.domain}`);
+  } catch (error) { $('panel-ssl-error').textContent = error.message; }
+  finally { $('panel-ssl-submit').disabled = false; }
 };
