@@ -229,7 +229,7 @@ def build_go_app(item):
     try:
         command([*prefix, 'mkdir', '-p', '--', str(build)], cwd=str(project), env=build_env)
         command([*prefix, go, 'mod', 'download'], cwd=str(project), env=build_env, timeout=300)
-        command([*prefix, go, 'build', '-o', str(binary), entry], cwd=str(project), env=build_env, timeout=300)
+        command([*prefix, go, 'build', '-buildvcs=false', '-o', str(binary), entry], cwd=str(project), env=build_env, timeout=300)
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
         raise ValueError(f'Go dependency installation or build failed in {project}:\n{error}') from error
     return str(binary)

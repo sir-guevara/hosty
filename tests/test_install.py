@@ -255,7 +255,7 @@ class GoRuntimeTest(unittest.TestCase):
                 binary = build_go_app({'path': temporary, 'go_entry': './cmd/server'})
             self.assertEqual(binary, str(Path(temporary) / '.hosty/app'))
             self.assertEqual(command.call_args_list[1].args[0], ['runuser', '-u', 'hosty', '--', '/usr/bin/go', 'mod', 'download'])
-            self.assertEqual(command.call_args_list[2].args[0], ['runuser', '-u', 'hosty', '--', '/usr/bin/go', 'build', '-o', binary, './cmd/server'])
+            self.assertEqual(command.call_args_list[2].args[0], ['runuser', '-u', 'hosty', '--', '/usr/bin/go', 'build', '-buildvcs=false', '-o', binary, './cmd/server'])
             self.assertNotIn('HOSTY_TOKEN', command.call_args.kwargs['env'])
             self.assertEqual(command.call_args.kwargs['cwd'], temporary)
 

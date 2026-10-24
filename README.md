@@ -83,6 +83,6 @@ Open **Settings** to change the panel username, password, or domain. Enter your 
 
 ## Go apps
 
-Select **Go**, a module directory containing `go.mod`, and the port your server uses. Set **Go package** to `.` for a root main package or, for example, `./cmd/server`. Hosty downloads modules, builds `.hosty/app`, and runs that binary in both Development and Production. Add `.hosty/` to your project’s `.gitignore`.
+Select **Go**, a module directory containing `go.mod`, and the port your server uses. Set **Go package** to `.` for a root main package or, for example, `./cmd/server`. Hosty downloads modules, builds `.hosty/app` with `-buildvcs=false` (omitting optional Git metadata so app-user builds do not require repository ownership), and runs that binary in both Development and Production. Add `.hosty/` to your project’s `.gitignore`.
 
 The Ubuntu installer supplies Go automatically (`golang-go`); local development needs a Go toolchain installed. Your server must read `HOST` and `PORT` to listen on the configured loopback address, or use a fixed port matching the app’s setting. Start/restart rebuilds the app; automatic source watching is not implemented. The toolchain may download a newer version when required by your module, so initial builds need network access. Go build commands run as `hosty` on installed servers and as your current user locally, with dependency and build caches inside `.hosty`.
