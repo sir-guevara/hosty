@@ -21,7 +21,7 @@ class FirewallTest(unittest.TestCase):
         calls = self.run_setup(connection='192.0.2.1 5555 192.0.2.2 2200')
         enable = calls.index(['ufw', '--force', 'enable'])
         for port in (2222, 2200, 80, 443):
-            rule = next(args for args in calls if args[:4] == ['ufw', 'insert', '1', 'allow'] and args[4] == f'{port}/tcp')
+            rule = next(args for args in calls if args[:3] == ['ufw', 'prepend', 'allow'] and args[3] == f'{port}/tcp')
             self.assertLess(calls.index(rule), enable)
         self.assertFalse(any('8787/tcp' in args or '9000/tcp' in args for args in calls))
         self.assertNotIn(['ufw', 'reset'], calls)
@@ -33,7 +33,7 @@ class FirewallTest(unittest.TestCase):
 
     def test_socket_activation_ports_allowed(self):
         calls = self.run_setup(socket_status='ActiveState=active\nListen=[::]:2223 (Stream)\n')
-        self.assertIn(['ufw', 'insert', '1', 'allow', '2223/tcp', 'comment', 'Hosty SSH'], calls)
+        self.assertIn(['ufw', 'prepend', 'allow', '2223/tcp', 'comment', 'Hosty SSH'], calls)
 
     @patch('hosty.cli.subprocess.run', return_value=subprocess.CompletedProcess([], 1, ''))
     def test_unknown_ssh_port_does_not_enable_firewall(self, run):
@@ -45,12 +45,30 @@ class FirewallTest(unittest.TestCase):
         calls = []
         def run(args, **kwargs):
             calls.append(args)
-            if args[:2] == ['ufw', 'insert']:
+            if args[:2] == ['ufw', 'prepend']:
                 raise subprocess.CalledProcessError(1, args)
             return subprocess.CompletedProcess(args, 0, 'port 22\n' if args[0] == 'sshd' else '')
         with patch('hosty.cli.subprocess.run', side_effect=run), self.assertRaises(subprocess.CalledProcessError):
             configure_firewall()
         self.assertNotIn(['ufw', '--force', 'enable'], calls)
+
+    def test_empty_and_existing_rulesets_keep_required_ports_first(self):
+        for initial in ([], ['deny all']):
+            with self.subTest(initial=initial):
+                rules = initial.copy()
+                def run(args, **kwargs):
+                    if args[:3] == ['ufw', 'insert', '1'] and not rules:
+                        raise subprocess.CalledProcessError(1, args, stderr="ERROR: Invalid position '1'")
+                    if args[:3] == ['ufw', 'prepend', 'allow']:
+                        rules.insert(0, args[3])
+                    if args == ['ufw', '--force', 'enable']:
+                        self.assertEqual(set(rules[:4]), {'22/tcp', '2222/tcp', '80/tcp', '443/tcp'})
+                    output = 'port 2222\n' if args == ['sshd', '-T'] else 'Status: inactive' if args == ['ufw', 'status'] else ''
+                    return subprocess.CompletedProcess(args, 0, output)
+                with patch('hosty.cli.subprocess.run', side_effect=run), patch.dict(os.environ, {'SSH_CONNECTION': '192.0.2.1 5000 192.0.2.2 22'}):
+                    configure_firewall()
+                self.assertEqual(set(rules[:4]), {'22/tcp', '2222/tcp', '80/tcp', '443/tcp'})
+                self.assertEqual(rules[4:], initial)
 
     @patch('hosty.server.SYSTEM', True)
     @patch('hosty.server.shutil.which', return_value='/usr/sbin/ufw')

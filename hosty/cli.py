@@ -106,11 +106,11 @@ def configure_firewall():
     ports = {port for port in ports if 1 <= port <= 65535}
     if not ports:
         raise RuntimeError('Could not determine the SSH port. Firewall was not enabled. Check sshd configuration and rerun install.')
-    # Insert before pre-existing deny rules so the current SSH connection remains usable.
+    # Prepend works with empty rulesets and precedes existing deny rules.
     for port in sorted(ports):
-        subprocess.run(['ufw', 'insert', '1', 'allow', f'{port}/tcp', 'comment', 'Hosty SSH'], check=True, env=locale)
+        subprocess.run(['ufw', 'prepend', 'allow', f'{port}/tcp', 'comment', 'Hosty SSH'], check=True, env=locale)
     for port in (80, 443):
-        subprocess.run(['ufw', 'insert', '1', 'allow', f'{port}/tcp', 'comment', 'Hosty web'], check=True, env=locale)
+        subprocess.run(['ufw', 'prepend', 'allow', f'{port}/tcp', 'comment', 'Hosty web'], check=True, env=locale)
     status = subprocess.run(['ufw', 'status'], capture_output=True, text=True, check=True, env=locale)
     if 'Status: active' not in status.stdout:
         subprocess.run(['ufw', 'default', 'deny', 'incoming'], check=True, env=locale)
