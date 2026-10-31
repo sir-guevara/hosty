@@ -124,7 +124,7 @@ class PanelTest(unittest.TestCase):
         import subprocess
         item = {'id': 'abcdef123456', 'name': 'Tool', 'domain': 'tool.example.com', 'path': self.temp.name, 'runtime': 'html', 'port': 9000, 'environment': 'production', 'ssl': True}
         server.save([item])
-        with patch.object(server, 'SYSTEM', True), patch.object(server, 'provision', side_effect=ValueError('Nginx configuration failed')), patch.object(server, 'command') as command, patch.object(Path, 'unlink'), patch.object(server.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'active')):
+        with patch.object(server, 'SYSTEM', True), patch.object(server, 'provision', side_effect=ValueError('Caddy configuration failed')), patch.object(server, 'command') as command, patch.object(Path, 'unlink'), patch.object(server.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'active')):
             with self.assertRaises(urllib.error.HTTPError) as ctx:
                 self.request('/api/apps/abcdef123456/environment', {'environment': 'development'})
             self.assertEqual(ctx.exception.code, 400)
@@ -173,7 +173,7 @@ class PanelTest(unittest.TestCase):
         managed = Path(self.temp.name) / 'managed'
         managed.mkdir()
         unit = managed / 'hosty-app-abcdef123456.service'
-        route = managed / 'hosty-abcdef123456.conf'
+        route = managed / 'hosty-abcdef123456.caddy'
         unit.write_text('unit')
         route.write_text('nginx')
         source = Path(self.temp.name) / 'source.txt'
@@ -183,7 +183,7 @@ class PanelTest(unittest.TestCase):
         with patch.object(server, 'SYSTEM', True), patch.object(server, 'Path', side_effect=mapped), patch.object(server, 'command') as command, patch.object(server.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'active')):
             self.request('/api/apps/abcdef123456/delete', {'confirmation': 'DELETE'})
             command.assert_any_call(['systemctl', 'disable', '--now', 'hosty-app-abcdef123456'])
-            command.assert_any_call(['systemctl', 'reload', 'nginx'])
+            command.assert_any_call(['systemctl', 'reload', 'caddy'])
         self.assertFalse(unit.exists())
         self.assertFalse(route.exists())
         self.assertEqual(server.apps(), [other])
@@ -196,14 +196,14 @@ class PanelTest(unittest.TestCase):
         managed = Path(self.temp.name) / 'managed'
         managed.mkdir()
         unit = managed / 'hosty-app-abcdef123456.service'
-        route = managed / 'hosty-abcdef123456.conf'
+        route = managed / 'hosty-abcdef123456.caddy'
         unit.write_text('original unit')
         route.write_text('original nginx')
         def mapped(path):
             return managed / Path(path).name
         def command(args):
-            if args == ['nginx', '-t']:
-                raise ValueError('Nginx check failed')
+            if args == server.CADDY_VALIDATE:
+                raise ValueError('Caddy check failed')
             return ''
         with patch.object(server, 'SYSTEM', True), patch.object(server, 'Path', side_effect=mapped), patch.object(server, 'command', side_effect=command), patch.object(server.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'active')):
             with self.assertRaises(urllib.error.HTTPError) as ctx:
@@ -260,7 +260,7 @@ class EnvironmentAddressTest(unittest.TestCase):
         item = {'id': 'abcdef123456', 'name': 'Tool', 'domain': 'app.example.com', 'port': 9000, 'ssl': True}
         with patch.object(server, 'DEV', True), patch.object(server, 'SYSTEM', False):
             app = server.status(item)
-            self.assertEqual(app['production_url'], 'https://app.example.com')
+            self.assertEqual(app['production_url'], 'http://app.example.com')
             self.assertEqual(app['dev_url'], 'http://app.localhost:9000')
             self.assertEqual(app['local_url'], app['dev_url'])
             self.assertEqual(app['domain'], 'app.example.com')
@@ -268,7 +268,7 @@ class EnvironmentAddressTest(unittest.TestCase):
         with patch.object(server, 'DEV', False), patch.object(server, 'SYSTEM', False):
             app = server.status(item)
             self.assertIsNone(app['local_url'])
-            self.assertEqual(app['production_url'], 'https://app.example.com')
+            self.assertEqual(app['production_url'], 'http://app.example.com')
             self.assertEqual(app['dev_url'], 'http://app.localhost:9000')
 
     def test_custom_development_domain(self):

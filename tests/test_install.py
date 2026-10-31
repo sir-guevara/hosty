@@ -231,16 +231,16 @@ class AppPortTest(unittest.TestCase):
         import tempfile
         from hosty.server import provision
         with tempfile.TemporaryDirectory() as temporary:
-            nginx = Path(temporary) / 'hosty-abcdef123456.conf'
-            nginx.write_text('server { listen 443 ssl; ssl_certificate /etc/cert.pem; location / { proxy_pass http://127.0.0.1:9000; } }')
+            nginx = Path(temporary) / 'hosty-abcdef123456.caddy'
+            nginx.write_text('example.com {\n reverse_proxy 127.0.0.1:9000\n}\n')
             def mapped(path):
                 return Path(temporary) / Path(path).name
             item = {'id': 'abcdef123456', 'name': 'Tool', 'domain': 'example.com', 'path': '/var/www/project', 'runtime': 'html', 'port': 3000, 'environment': 'production', 'ssl': True}
             with patch('hosty.server.SYSTEM', False), patch('hosty.server.Path', side_effect=mapped):
                 provision(item)
-            self.assertIn('listen 443 ssl', nginx.read_text())
-            self.assertIn('proxy_pass http://127.0.0.1:3000;', nginx.read_text())
-            self.assertIn('ssl_certificate /etc/cert.pem', nginx.read_text())
+            self.assertTrue(nginx.read_text().startswith('example.com {'))
+            self.assertIn('reverse_proxy 127.0.0.1:3000', nginx.read_text())
+            self.assertNotIn('http://example.com', nginx.read_text())
 
 class GoRuntimeTest(unittest.TestCase):
     @patch('hosty.server.shutil.which', return_value='/usr/bin/go')

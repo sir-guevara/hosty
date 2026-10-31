@@ -164,7 +164,8 @@ def status(item):
     result['status'] = 'configured'
     result['dev_domain'] = development_domain(item)
     result['dev_url'] = f'http://{result["dev_domain"]}:{item["port"]}'
-    result['production_url'] = (('https' if item.get('ssl') else 'http') + '://' + item['domain']) if item.get('domain') else None
+    result['ssl'] = https_enabled(item)
+    result['production_url'] = (('https' if https_enabled(item) else 'http') + '://' + item['domain']) if item.get('domain') else None
     result['environment'] = environment(item)
     result['local_url'] = result['dev_url'] if environment(item) == 'development' else None
     if not SYSTEM and environment(item) == 'development':
@@ -343,51 +344,44 @@ WantedBy=multi-user.target
     Path(f'/etc/systemd/system/hosty-app-{ident}.service').write_text(unit)
 
 
-def add_ipv6_listeners(config):
-    # Ubuntu's default site listens on IPv6 too. Cover both address families.
-    def expand(match):
-        indent, port, options = match.groups()
-        if re.search(r'listen\s+\[::\]:' + port + r'\b', config):
-            return match.group(0)
-        return match.group(0) + f'\n{indent}listen [::]:{port}{options};'
-    return re.sub(r'(?m)^([ \t]*)listen[ \t]+(80|443)([^;\n]*);', expand, config)
+CADDY_CONFIG = '/etc/caddy/Caddyfile'
+CADDY_VALIDATE = ['caddy', 'validate', '--config', CADDY_CONFIG, '--adapter', 'caddyfile']
 
 
-def write_app_route(item):
-    ident = item['id']
-    port = item['port']
-    config = f'''server {{
-    listen 80;
-    server_name {item['domain']};
-    add_header X-Hosty-App {ident} always;
-    location / {{
-        proxy_pass http://127.0.0.1:{port};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }}
-}}
-'''
-    nginx_path = Path(f'/etc/nginx/conf.d/hosty-{ident}.conf')
-    original = nginx_path.read_text() if nginx_path.exists() else None
-    if environment(item) == 'production':
-        if item.get('ssl') and nginx_path.exists():
-            config = re.sub(r'proxy_pass http://127\.0\.0\.1:[0-9]+;', f'proxy_pass http://127.0.0.1:{port};', nginx_path.read_text())
-        config = re.sub(r'add_header\s+X-Hosty-App\s+[^;]+;', '', config)
-        config = re.sub(r'\bserver\s*\{', lambda match: match.group(0) + f'\n    add_header X-Hosty-App {ident} always;', config)
-        config = add_ipv6_listeners(config)
-        nginx_path.write_text(config)
-    else:
-        nginx_path.unlink(missing_ok=True)
+def https_enabled(item):
+    return bool(SYSTEM and environment(item) == 'production' and public_certificate_domain(item.get('domain', '')))
+
+
+def route_config(domain, port, ident=None):
+    # Explicit HTTP avoids Caddy's local CA for development/reserved hostnames.
+    address = domain if public_certificate_domain(domain) else 'http://' + domain
+    marker = f'    header X-Hosty-App {ident}\n' if ident else ''
+    return f'{address} {{\n{marker}    reverse_proxy 127.0.0.1:{port}\n}}\n'
+
+
+def write_route(path, config, reload=True):
+    original = path.read_text() if path.exists() else None
     try:
-        command(['nginx', '-t'])
-        command(['systemctl', 'reload', 'nginx'])
+        if config is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(config)
+        if reload:
+            command(CADDY_VALIDATE)
+            command(['systemctl', 'reload', 'caddy'])
     except (ValueError, OSError, subprocess.TimeoutExpired):
         if original is None:
-            nginx_path.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
         else:
-            nginx_path.write_text(original)
+            path.write_text(original)
+        # Caddy reloads atomically; a rejected config leaves the live config intact.
         raise
+
+
+def write_app_route(item, reload=True):
+    path = Path(f'/etc/caddy/hosty.d/hosty-{item["id"]}.caddy')
+    config = route_config(item['domain'], item['port'], item['id']) if environment(item) == 'production' else None
+    write_route(path, config, reload)
 
 
 def provision(item):
@@ -405,7 +399,7 @@ def routing_status(item):
         return {'state': 'unavailable', 'message': 'Production routing requires an installed server.'}
     connection = http.client.HTTPConnection('127.0.0.1', 80, timeout=1)
     try:
-        if item.get('ssl'):
+        if https_enabled(item):
             raw = socket.create_connection(('127.0.0.1', 443), timeout=2)
             try:
                 connection.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=item['domain'])
@@ -415,43 +409,31 @@ def routing_status(item):
         connection.request('HEAD', '/', headers={'Host': item['domain']})
         response = connection.getresponse()
         if response.getheader('X-Hosty-App') != item['id']:
-            return {'state': 'error', 'message': 'Domain is reaching a different Nginx site. Repair routing in Hosty.'}
+            return {'state': 'error', 'message': 'Domain is reaching a different Caddy site. Repair routing in Hosty.'}
         if response.status in (502, 503, 504):
             return {'state': 'error', 'message': 'Domain routing is applied, but the app is not responding. Check its status and logs.'}
-        return {'state': 'ready', 'message': 'Nginx route verified on this server. Domain DNS must point here.'}
+        return {'state': 'ready', 'message': 'Caddy route verified on this server. Domain DNS must point here.'}
     except ssl.SSLCertVerificationError:
         return {'state': 'error', 'message': 'The app HTTPS certificate could not be verified. Check its domain and expiry.'}
     except (OSError, http.client.HTTPException):
-        return {'state': 'error', 'message': 'Nginx is not responding on this server. Repair routing in Hosty.'}
+        return {'state': 'error', 'message': 'Caddy or its HTTPS certificate is not ready. Check DNS and journalctl -u caddy; repair routing if needed.'}
     finally:
         connection.close()
 
 
 def routing_details(item):
-    details = {'domain': item['domain'], 'environment': environment(item), 'upstream': f'127.0.0.1:{item["port"]}', 'expected_config': f'/etc/nginx/conf.d/hosty-{item["id"]}.conf', 'routing': routing_status(item)}
+    path = Path(f'/etc/caddy/hosty.d/hosty-{item["id"]}.caddy')
+    details = {'domain': item['domain'], 'environment': environment(item), 'upstream': f'127.0.0.1:{item["port"]}', 'expected_config': str(path), 'routing': routing_status(item)}
     try:
         details['dns_addresses'] = sorted({address[4][0] for address in socket.getaddrinfo(item['domain'], 80, type=socket.SOCK_STREAM)})
     except OSError as error:
         details['dns_error'] = str(error)
     if SYSTEM:
-        result = subprocess.run(['nginx', '-T'], capture_output=True, text=True, timeout=10)
-        details['nginx_valid'] = result.returncode == 0
-        details['nginx_messages'] = result.stderr.strip()
-        sections = re.split(r'# configuration file ([^:\n]+):\n', result.stdout)
-        matching = []
-        loaded = []
-        for index in range(1, len(sections) - 1, 2):
-            filename, content = sections[index], sections[index + 1]
-            loaded.append(filename)
-            names = re.findall(r'\bserver_name\s+([^;]+);', content)
-            if any(item['domain'] in nameset.split() for nameset in names):
-                matching.append(filename)
-        details['route_loaded'] = details['expected_config'] in loaded
-        details['matching_sites'] = matching
-        if not details['route_loaded']:
-            details['explanation'] = 'Nginx has not loaded the Hosty app configuration. Its http configuration must include /etc/nginx/conf.d/*.conf.'
-        elif len(matching) > 1:
-            details['explanation'] = 'Multiple loaded Nginx configurations claim this domain. A conflicting site may be serving the welcome page.'
+        result = subprocess.run(CADDY_VALIDATE, capture_output=True, text=True, timeout=10)
+        details['caddy_valid'] = result.returncode == 0
+        details['caddy_messages'] = result.stderr.strip()
+        details['route_configured'] = path.exists()
+        details['explanation'] = 'Configuration validation checks disk files; the routing probe checks the live server. Certificate issuance may still be pending. See journalctl -u caddy for TLS errors.'
     return details
 
 
@@ -486,7 +468,7 @@ def select_app_port(raw, items, current=None, panel_port=8787):
 def update_app(items, item, candidate):
     was_running = status(item)['status'] == 'running'
     if SYSTEM:
-        paths = [Path(f'/etc/systemd/system/hosty-app-{item["id"]}.service'), Path(f'/etc/nginx/conf.d/hosty-{item["id"]}.conf')]
+        paths = [Path(f'/etc/systemd/system/hosty-app-{item["id"]}.service'), Path(f'/etc/caddy/hosty.d/hosty-{item["id"]}.caddy')]
         backups = {path: path.read_text() if path.exists() else None for path in paths}
     try:
         if SYSTEM:
@@ -505,7 +487,7 @@ def update_app(items, item, candidate):
                 else:
                     path.write_text(content)
             command(['systemctl', 'daemon-reload'])
-            command(['systemctl', 'reload', 'nginx'])
+            command(['systemctl', 'reload', 'caddy'])
             service_action(item, 'restart' if was_running else 'stop')
         elif was_running:
             stop_local(item['id'])
@@ -521,25 +503,25 @@ def delete_app(items, item):
         return
     unit = f'hosty-app-{item["id"]}'
     unit_path = Path(f'/etc/systemd/system/{unit}.service')
-    nginx_path = Path(f'/etc/nginx/conf.d/hosty-{item["id"]}.conf')
-    backups = {path: path.read_text() if path.exists() else None for path in (unit_path, nginx_path)}
+    route_path = Path(f'/etc/caddy/hosty.d/hosty-{item["id"]}.caddy')
+    backups = {path: path.read_text() if path.exists() else None for path in (unit_path, route_path)}
     running = status(item)['status'] == 'running'
     enabled = subprocess.run(['systemctl', 'is-enabled', '--quiet', unit], capture_output=True).returncode == 0
     try:
         if backups[unit_path] is not None:
             command(['systemctl', 'disable', '--now', unit])
         unit_path.unlink(missing_ok=True)
-        nginx_path.unlink(missing_ok=True)
-        command(['nginx', '-t'])
+        route_path.unlink(missing_ok=True)
+        command(CADDY_VALIDATE)
         command(['systemctl', 'daemon-reload'])
-        command(['systemctl', 'reload', 'nginx'])
+        command(['systemctl', 'reload', 'caddy'])
         save(remaining)
     except (ValueError, OSError, subprocess.TimeoutExpired):
         for path, content in backups.items():
             if content is not None:
                 path.write_text(content)
         command(['systemctl', 'daemon-reload'])
-        command(['systemctl', 'reload', 'nginx'])
+        command(['systemctl', 'reload', 'caddy'])
         if backups[unit_path] is not None:
             if enabled:
                 command(['systemctl', 'enable', unit])
@@ -548,42 +530,13 @@ def delete_app(items, item):
         raise
 
 
-def configure_panel_domain(domain, port):
-    if not SYSTEM:
-        return
-    path = Path('/etc/nginx/conf.d/hosty-panel.conf')
-    original = path.read_text() if path.exists() else None
-    if original and re.search(r'server_name\s+' + re.escape(domain) + r'\s*;', original) and f'proxy_pass http://127.0.0.1:{port};' in original:
-        updated = add_ipv6_listeners(original)
-        if updated == original:
-            return
-        config = updated
-    else:
-        config = None
-    config = config or f"""server {{
-    listen 80;
-    server_name {domain};
-    location / {{
-        proxy_pass http://127.0.0.1:{port};
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }}
-}}
-"""
-    try:
-        path.write_text(add_ipv6_listeners(config))
-        command(['nginx', '-t'])
-        command(['systemctl', 'reload', 'nginx'])
-    except (ValueError, OSError, subprocess.TimeoutExpired):
-        if original is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.write_text(original)
-        raise
+def configure_panel_domain(domain, port, reload=True):
+    if SYSTEM:
+        write_route(Path('/etc/caddy/hosty.d/hosty-panel.caddy'), route_config(domain, port), reload)
 
 
 def public_certificate_domain(domain):
-    if domain.endswith(('.localhost', '.local', '.test', '.invalid', '.example')) or domain == 'localhost':
+    if not domain or '.' not in domain or domain.endswith(('.localhost', '.local', '.test', '.invalid', '.example')) or domain == 'localhost':
         return False
     try:
         ipaddress.ip_address(domain)
@@ -597,10 +550,7 @@ def issue_panel_certificate(config, email, port):
         raise ValueError('Panel SSL requires an installed Ubuntu server.')
     if not public_certificate_domain(config['domain']):
         raise ValueError('Use a public panel domain with DNS pointing to this server. Local hostnames cannot receive a Let’s Encrypt certificate.')
-    if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email):
-        raise ValueError('Enter a valid certificate notification email.')
     configure_panel_domain(config['domain'], port)
-    command(['certbot', '--nginx', '-d', config['domain'], '--non-interactive', '--agree-tos', '-m', email, '--redirect'])
     updated = {**config, 'ssl': True}
     write_config(DATA, updated)
     return updated
@@ -637,9 +587,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'error': 'Enter your panel token to connect.'}, 401)
             if self.path == '/api/settings':
                 config = read_config(DATA)
-                return self.reply({'username': config['username'], 'domain': config['domain'], 'panel_port': self.server.server_port, 'system': SYSTEM, 'ssl': config.get('ssl', False)})
+                return self.reply({'username': config['username'], 'domain': config['domain'], 'panel_port': self.server.server_port, 'system': SYSTEM, 'ssl': bool(SYSTEM and public_certificate_domain(config['domain']))})
             if self.path == '/api/overview':
-                return self.reply({'panel': {'domain': (read_config(DATA) or {}).get('domain'), 'ssl': (read_config(DATA) or {}).get('ssl', False)}, 'server': metrics(), 'apps': [{**status(a), 'routing': routing_status(a)} for a in apps()]})
+                return self.reply({'panel': {'domain': (read_config(DATA) or {}).get('domain'), 'ssl': bool(SYSTEM and public_certificate_domain((read_config(DATA) or {}).get('domain', '')))}, 'server': metrics(), 'apps': [{**status(a), 'routing': routing_status(a)} for a in apps()]})
             return self.reply({'error': 'Not found'}, 404)
         filename = {'/': 'index.html', '/style.css': 'style.css', '/app.js': 'app.js', '/lineicons.css': 'lineicons.css', '/lineicons.woff2': 'lineicons.woff2'}.get(self.path.split('?')[0])
         if not filename:
@@ -763,9 +713,9 @@ class Handler(BaseHTTPRequestHandler):
                     except (ValueError, OSError, subprocess.TimeoutExpired):
                         subprocess.run(['systemctl', 'disable', '--now', f'hosty-app-{item["id"]}'], capture_output=True)
                         Path(f'/etc/systemd/system/hosty-app-{item["id"]}.service').unlink(missing_ok=True)
-                        Path(f'/etc/nginx/conf.d/hosty-{item["id"]}.conf').unlink(missing_ok=True)
+                        Path(f'/etc/caddy/hosty.d/hosty-{item["id"]}.caddy').unlink(missing_ok=True)
                         subprocess.run(['systemctl', 'daemon-reload'], capture_output=True)
-                        subprocess.run(['systemctl', 'reload', 'nginx'], capture_output=True)
+                        subprocess.run(['systemctl', 'reload', 'caddy'], capture_output=True)
                         raise
                 items.append(item)
                 save(items)
@@ -789,7 +739,7 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'repair':
                 if not SYSTEM or environment(item) != 'production':
                     raise ValueError('Routing repair is for Production apps on installed servers.')
-                command(['systemctl', 'start', 'nginx'])
+                command(['systemctl', 'start', 'caddy'])
                 write_app_route(item)
                 return self.reply({**status(item), 'routing': routing_status(item)})
             if action == 'delete':
@@ -815,7 +765,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(status(item))
                 candidate = {**item, 'domain': domain, 'environment': mode, 'ssl': False}
                 if SYSTEM:
-                    paths = [Path(f'/etc/systemd/system/hosty-app-{ident}.service'), Path(f'/etc/nginx/conf.d/hosty-{ident}.conf')]
+                    paths = [Path(f'/etc/systemd/system/hosty-app-{ident}.service'), Path(f'/etc/caddy/hosty.d/hosty-{ident}.caddy')]
                     backups = {path: path.read_text() if path.exists() else None for path in paths}
                     was_running = status(item)['status'] == 'running'
                     try:
@@ -827,7 +777,7 @@ class Handler(BaseHTTPRequestHandler):
                             else:
                                 path.write_text(content)
                         command(['systemctl', 'daemon-reload'])
-                        command(['systemctl', 'reload', 'nginx'])
+                        command(['systemctl', 'reload', 'caddy'])
                         command(['systemctl', 'restart' if was_running else 'stop', f'hosty-app-{ident}'])
                         raise
                 else:
@@ -861,18 +811,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'logs': command(['journalctl', '-u', f'hosty-app-{ident}', '-n', '80', '--no-pager'])})
             if action == 'ssl':
                 email = str(data.get('email', ''))
-                if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email):
-                    raise ValueError('Enter a valid email for certificate expiry notices.')
-                command(['certbot', '--nginx', '-d', item['domain'], '--non-interactive', '--agree-tos', '-m', email, '--redirect'])
+                if not public_certificate_domain(item['domain']):
+                    raise ValueError('Use a public domain for automatic HTTPS.')
+                write_app_route(item)
                 item['ssl'] = True
                 save(items)
-                write_app_route(item)
                 warning = None
                 if config and public_certificate_domain(config['domain']) and not config.get('ssl'):
                     try:
                         issue_panel_certificate(config, email, self.server.server_port)
                     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-                        warning = f'App HTTPS is ready, but panel HTTPS failed: {error}'
+                        warning = f'App automatic HTTPS is configured, but panel HTTPS setup failed: {error}'
                 return self.reply({**status(item), 'warning': warning})
             else:
                 if action in ('start', 'restart'):

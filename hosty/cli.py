@@ -13,7 +13,7 @@ from .auth import ensure_config
 
 PACKAGES = (
     'python3', 'python3-venv', 'python3-pip', 'python3-uvicorn', 'python3-dev',
-    'nginx', 'certbot', 'python3-certbot-nginx', 'curl', 'unzip',
+    'caddy', 'curl', 'unzip',
     'ca-certificates', 'git', 'openssh-server', 'build-essential', 'pkg-config', 'acl', 'golang-go', 'ufw',
 )
 SYSTEM_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
@@ -119,6 +119,97 @@ def configure_firewall():
     subprocess.run(['ufw', 'status', 'verbose'], check=True, env=locale)
 
 
+CADDYFILE = '# Managed by Hosty\n{\n    admin 127.0.0.1:2019\n}\nimport /etc/caddy/hosty.d/*.caddy\n'
+
+
+def configure_caddy(server, config):
+    """Stage and validate all routes before handing ports over from nginx."""
+    main = Path('/etc/caddy/Caddyfile')
+    original = main.read_text() if main.exists() else None
+    if original and original != CADDYFILE:
+        # Only replace the packaged welcome site automatically.
+        stock = re.sub(r'#[^\n]*', '', original)
+        if not re.fullmatch(r'\s*:80\s*\{\s*root\s+\*\s+/usr/share/caddy\s+file_server\s*\}\s*', stock):
+            raise RuntimeError('Existing custom /etc/caddy/Caddyfile found. Back it up and move it aside before installing Hosty.')
+    nginx_active = subprocess.run(['systemctl', 'is-active', '--quiet', 'nginx'], capture_output=True).returncode == 0
+    nginx_enabled = subprocess.run(['systemctl', 'is-enabled', '--quiet', 'nginx'], capture_output=True).returncode == 0
+    if nginx_active or nginx_enabled:
+        result = subprocess.run(['nginx', '-T'], capture_output=True, text=True, check=True)
+        sections = re.split(r'# configuration file ([^:\n]+):\n', result.stdout)
+        for index in range(1, len(sections) - 1, 2):
+            filename, content = sections[index:index + 2]
+            clean = re.sub(r'#[^\n]*', '', content)
+            if filename == '/etc/nginx/sites-enabled/default' and (re.search(r'\bproxy_pass\b', clean) or re.findall(r'\bserver_name\s+([^;]+);', clean) != ['_'] or re.findall(r'\broot\s+([^;]+);', clean) != ['/var/www/html']):
+                raise RuntimeError('Customized nginx default site found. Migrate it before installing Hosty with Caddy.')
+            if re.search(r'\bserver\s*\{', clean) and not re.fullmatch(r'/etc/nginx/conf.d/hosty-(?:panel|[a-f0-9]{12})\.conf', filename) and filename != '/etc/nginx/sites-enabled/default':
+                raise RuntimeError(f'Unmanaged nginx site found: {filename}. Migrate it before installing Hosty with Caddy.')
+        if not Path('/etc/nginx/conf.d/hosty-panel.conf').exists():
+            raise RuntimeError('nginx is running without a Hosty installation. Free ports 80/443 before installing.')
+    directory = Path('/etc/caddy/hosty.d')
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o755)
+    backups = {path: path.read_text() for path in directory.glob('*.caddy')}
+    caddy_active = subprocess.run(['systemctl', 'is-active', '--quiet', 'caddy'], capture_output=True).returncode == 0
+    caddy_enabled = subprocess.run(['systemctl', 'is-enabled', '--quiet', 'caddy'], capture_output=True).returncode == 0
+    try:
+        if original and original != CADDYFILE:
+            backup = main.with_name('Caddyfile.before-hosty')
+            if not backup.exists():
+                backup.write_text(original)
+        main.parent.mkdir(parents=True, exist_ok=True)
+        main.write_text(CADDYFILE)
+        main.chmod(0o644)
+        # Regenerate only Hosty's routes, retaining other explicitly imported files.
+        for path in directory.glob('hosty-*.caddy'):
+            path.unlink()
+        server.configure_panel_domain(config['domain'], 8787, reload=False)
+        for app in server.apps():
+            server.write_app_route(app, reload=False)
+        for path in directory.glob('*.caddy'):
+            path.chmod(0o644)
+        # Validate as the service user, using its persistent certificate storage.
+        subprocess.run(['runuser', '-u', 'caddy', '--', 'caddy', 'validate', '--config', str(main), '--adapter', 'caddyfile'], check=True)
+        if nginx_active:
+            subprocess.run(['systemctl', 'stop', 'nginx'], check=True)
+        subprocess.run(['systemctl', 'enable', '--now', 'caddy'], check=True)
+        subprocess.run(['systemctl', 'reload', 'caddy'], check=True)
+        subprocess.run(['systemctl', 'is-active', '--quiet', 'caddy'], check=True)
+        if nginx_active or nginx_enabled:
+            subprocess.run(['systemctl', 'disable', 'nginx'], check=True)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        if original is None:
+            main.unlink(missing_ok=True)
+        else:
+            main.write_text(original)
+        for path in directory.glob('*.caddy'):
+            if path not in backups:
+                path.unlink()
+        for path, content in backups.items():
+            path.write_text(content)
+        if caddy_active:
+            subprocess.run(['systemctl', 'reload', 'caddy'], check=False)
+        else:
+            subprocess.run(['systemctl', 'stop', 'caddy'], check=False)
+        if not caddy_enabled:
+            subprocess.run(['systemctl', 'disable', 'caddy'], check=False)
+        if nginx_active:
+            subprocess.run(['systemctl', 'start', 'nginx'], check=False)
+        if nginx_enabled:
+            subprocess.run(['systemctl', 'enable', 'nginx'], check=False)
+        raise
+
+
+def retire_hosty_certbot(domains):
+    renewals = list(Path('/etc/letsencrypt/renewal').glob('*.conf'))
+    if not renewals:
+        return
+    if all(re.sub(r'-[0-9]+$', '', path.stem) in domains for path in renewals):
+        # The legacy installer created this timer. Leave shared Certbot jobs alone.
+        subprocess.run(['systemctl', 'disable', '--now', 'certbot.timer'], check=True)
+    else:
+        print('Shared Certbot renewal jobs remain enabled. Review legacy nginx certificate jobs; Hosty now uses Caddy.', flush=True)
+
+
 def install():
     if os.geteuid() != 0 or not Path('/etc/debian_version').exists():
         raise SystemExit('Run sudo hosty install on an Ubuntu server.')
@@ -137,8 +228,7 @@ def install():
     bun = install_bun()
     subprocess.run(['/usr/bin/python3', '-c', 'import venv, pip, uvicorn'], check=True)
     subprocess.run(['go', 'version'], check=True)
-    subprocess.run(['certbot', 'plugins', '--init'], check=True)
-    subprocess.run(['nginx', '-t'], check=True)
+    subprocess.run(['caddy', 'version'], check=True)
     data = Path('/var/lib/hosty')
     data.mkdir(exist_ok=True)
     os.chown(data, 0, 0)
@@ -153,10 +243,9 @@ def install():
     from . import server
     server.SYSTEM = True
     server.DATA = data
-    subprocess.run(['systemctl', 'enable', '--now', 'nginx'], check=True)
-    server.configure_panel_domain(config['domain'], 8787)
-    for app in server.apps():
-        server.write_app_route(app)
+    configure_caddy(server, config)
+    if Path('/etc/nginx/conf.d/hosty-panel.conf').exists():
+        retire_hosty_certbot({config['domain'], *(app.get('domain', '') for app in server.apps())})
     token = secrets.token_urlsafe(32)
     env = Path('/etc/hosty.env')
     if not env.exists():
@@ -171,6 +260,7 @@ def install():
 Description=Hosty panel
 After=network.target
 [Service]
+UMask=0022
 WorkingDirectory=/opt/hosty
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/etc/hosty.env
@@ -183,13 +273,14 @@ WantedBy=multi-user.target
     launcher.write_text('#!/bin/sh\ncd /opt/hosty || exit 1\nexec /usr/bin/python3 -m hosty.cli "$@"\n')
     launcher.chmod(0o755)
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
-    subprocess.run(['systemctl', 'enable', '--now', 'nginx', 'ssh', 'certbot.timer', 'hosty'], check=True)
+    subprocess.run(['systemctl', 'enable', '--now', 'caddy', 'ssh', 'hosty'], check=True)
     subprocess.run(['systemctl', 'restart', 'hosty'], check=True)
     subprocess.run(['systemctl', 'is-active', '--quiet', 'hosty'], check=True)
     configure_firewall()
     print(f'Dependencies ready. Bun: {bun}. Python ASGI runtime: /usr/bin/python3.', flush=True)
     print('Hosty installed. Connect securely with: ssh -L 8787:127.0.0.1:8787 root@YOUR_SERVER')
-    print(f'Open http://{config["domain"]} on this machine. Username: {config["username"]}. Use your configured password.')
+    scheme = 'https' if server.public_certificate_domain(config['domain']) else 'http'
+    print(f'Open {scheme}://{config["domain"]} on this machine. Username: {config["username"]}. Use your configured password.')
     print('For a remote VPS, point the domain DNS to its public IP, or use http://localhost:8787 through the SSH tunnel.')
 
 

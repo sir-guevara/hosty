@@ -110,7 +110,7 @@ class AccountTest(unittest.TestCase):
             result, _ = self.request('settings/ssl', {'email': 'me@example.com'}, cookie)
         self.assertTrue(result['ssl'])
         self.assertTrue(read_config(server.DATA)['ssl'])
-        command.assert_any_call(['certbot', '--nginx', '-d', 'panel.example.com', '--non-interactive', '--agree-tos', '-m', 'me@example.com', '--redirect'])
+        command.assert_not_called()
 
     def test_app_ssl_automatically_includes_panel_setup(self):
         from hosty.auth import write_config
@@ -120,8 +120,7 @@ class AccountTest(unittest.TestCase):
         cookie = self.login()
         with patch.object(server, 'SYSTEM', True), patch.object(server, 'configure_panel_domain'), patch.object(server, 'write_app_route'), patch.object(server, 'command') as command, patch.object(server, 'status', return_value={'ssl': True}):
             self.request('apps/abcdef123456/ssl', {'email': 'me@example.com'}, cookie)
-        domains = [call.args[0][3] for call in command.call_args_list if call.args[0][0] == 'certbot']
-        self.assertEqual(domains, ['app.example.com', 'panel.example.com'])
+        command.assert_not_called()
         self.assertTrue(read_config(server.DATA)['ssl'])
         self.assertTrue(server.apps()[0]['ssl'])
 
@@ -155,11 +154,11 @@ class FirstRunTest(unittest.TestCase):
     def test_panel_route_preserves_existing_https(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / 'panel.conf'
-            original = 'server { listen 443 ssl; server_name panel.example.com; location / { proxy_pass http://127.0.0.1:8787; } }'
+            original = server.route_config('panel.example.com', 8787)
             path.write_text(original)
             with patch.object(server, 'SYSTEM', True), patch.object(server, 'Path', return_value=path), patch.object(server, 'command') as command:
                 server.configure_panel_domain('panel.example.com', 8787)
-                command.assert_not_called()
+                command.assert_any_call(['systemctl', 'reload', 'caddy'])
             self.assertEqual(path.read_text(), original)
 
     def test_panel_route_updates_domain_and_rolls_back_failure(self):
@@ -167,7 +166,7 @@ class FirstRunTest(unittest.TestCase):
             path = Path(temporary) / 'panel.conf'
             original = 'server { server_name old.example.com; }'
             path.write_text(original)
-            with patch.object(server, 'SYSTEM', True), patch.object(server, 'Path', return_value=path), patch.object(server, 'command', side_effect=ValueError('Nginx failed')):
+            with patch.object(server, 'SYSTEM', True), patch.object(server, 'Path', return_value=path), patch.object(server, 'command', side_effect=ValueError('Caddy failed')):
                 with self.assertRaises(ValueError):
                     server.configure_panel_domain('new.example.com', 8787)
             self.assertEqual(path.read_text(), original)
